@@ -3,11 +3,15 @@ package acp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 )
 
-// ClientSideConnection implements the Client interface for making requests to the client.
+// ClientSideConnection represents a client-side connection to an agent.
+//
+// This class provides the client's view of an ACP connection, allowing
+// clients to send requests to agents and handle incoming agent requests.
+//
+// See protocol docs: [Client](https://agentclientprotocol.com/protocol/overview#client)
 type ClientSideConnection struct {
 	conn *Connection
 	impl Client
@@ -15,281 +19,132 @@ type ClientSideConnection struct {
 
 // NewClientSideConnection creates a new client-side connection to an agent.
 //
-// This establishes the communication channel from the client's perspective
-// following the ACP specification.
-//
 // Parameters:
 //   - client: The Client implementation that will handle incoming agent requests
 //   - reader: The stream for receiving data from the agent (typically agent's stdout)
 //   - writer: The stream for sending data to the agent (typically agent's stdin)
 //
 // See protocol docs: [Communication Model](https://agentclientprotocol.com/protocol/overview#communication-model)
-func NewClientSideConnection(client Client, writer io.Writer, reader io.Reader) *ClientSideConnection {
+func NewClientSideConnection(client Client, writer io.Writer, reader io.Reader, opts ...ConnectionOption) *ClientSideConnection {
 	csc := &ClientSideConnection{
 		impl: client,
 	}
 
-	// Create bidirectional JSON-RPC connection
-	handler := func(method string, params json.RawMessage) (any, error) {
-		return csc.handleIncomingMethod(method, params)
+	handler := func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+		return csc.handleIncomingMethod(ctx, method, params)
 	}
-	csc.conn = NewConnection(handler, reader, writer)
+	csc.conn = NewConnection(handler, reader, writer, opts...)
 
 	return csc
 }
 
-// SessionUpdate sends a session update notification to the client.
-func (c *ClientSideConnection) SessionUpdate(ctx context.Context, params *SessionNotification) error {
-	return c.conn.SendNotification(ctx, ClientMethods.SessionUpdate, params)
+// Start begins processing JSON-RPC messages.
+func (c *ClientSideConnection) Start(ctx context.Context) error {
+	return c.conn.Start(ctx)
 }
 
-// RequestPermission requests user permission for a tool call operation.
-func (c *ClientSideConnection) RequestPermission(ctx context.Context, params *RequestPermissionRequest) (*RequestPermissionResponse, error) {
-	data, err := c.conn.SendRequest(ctx, ClientMethods.SessionRequestPermission, params)
-	if err != nil {
-		return nil, err
-	}
-	var response RequestPermissionResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+// Close closes the connection gracefully.
+func (c *ClientSideConnection) Close() error {
+	return c.conn.Close()
 }
 
-// ReadTextFile reads content from a text file in the client's file system.
-func (c *ClientSideConnection) ReadTextFile(ctx context.Context, params *ReadTextFileRequest) (*ReadTextFileResponse, error) {
-	data, err := c.conn.SendRequest(ctx, ClientMethods.FsReadTextFile, params)
-	if err != nil {
-		return nil, err
-	}
-	var response ReadTextFileResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+// Done returns a channel that is closed when the connection is done.
+func (c *ClientSideConnection) Done() <-chan struct{} {
+	return c.conn.Done()
 }
 
-// WriteTextFile writes content to a text file in the client's file system.
-func (c *ClientSideConnection) WriteTextFile(ctx context.Context, params *WriteTextFileRequest) error {
-	_, err := c.conn.SendRequest(ctx, ClientMethods.FsWriteTextFile, params)
-	return err
-}
+// --- Outbound agent-calling methods ---
 
-// CreateTerminal creates a new terminal session.
-func (c *ClientSideConnection) CreateTerminal(ctx context.Context, params *CreateTerminalRequest) (*CreateTerminalResponse, error) {
-	data, err := c.conn.SendRequest(ctx, ClientMethods.TerminalCreate, params)
-	if err != nil {
-		return nil, err
-	}
-	var response CreateTerminalResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
-}
-
-// CreateTerminalHandle executes a command in a new terminal and returns a TerminalHandle.
-//
-// Returns a TerminalHandle that can be used to get output, wait for exit,
-// kill the command, or release the terminal.
-//
-// The terminal can also be embedded in tool calls by using its ID in
-// ToolCallContent with type "terminal".
-//
-// This matches the TypeScript AgentSideConnection.createTerminal() method.
-func (c *ClientSideConnection) CreateTerminalHandle(ctx context.Context, params *CreateTerminalRequest) (*TerminalHandle, error) {
-	response, err := c.CreateTerminal(ctx, params)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewTerminalHandle(response.TerminalId, params.SessionId, c.conn), nil
-}
-
-// TerminalOutput gets the current output and status of a terminal.
-func (c *ClientSideConnection) TerminalOutput(ctx context.Context, params *TerminalOutputRequest) (*TerminalOutputResponse, error) {
-	data, err := c.conn.SendRequest(ctx, ClientMethods.TerminalOutput, params)
-	if err != nil {
-		return nil, err
-	}
-	var response TerminalOutputResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
-}
-
-// ReleaseTerminal releases a terminal and frees its resources.
-func (c *ClientSideConnection) ReleaseTerminal(ctx context.Context, params *ReleaseTerminalRequest) error {
-	_, err := c.conn.SendRequest(ctx, ClientMethods.TerminalRelease, params)
-	return err
-}
-
-// WaitForTerminalExit waits for a terminal command to exit.
-func (c *ClientSideConnection) WaitForTerminalExit(ctx context.Context, params *WaitForTerminalExitRequest) (*WaitForTerminalExitResponse, error) {
-	data, err := c.conn.SendRequest(ctx, ClientMethods.TerminalWaitForExit, params)
-	if err != nil {
-		return nil, err
-	}
-	var response WaitForTerminalExitResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
-}
-
-// KillTerminalCommand kills a terminal command without releasing the terminal.
-func (c *ClientSideConnection) KillTerminalCommand(ctx context.Context, params *KillTerminalCommandRequest) error {
-	_, err := c.conn.SendRequest(ctx, ClientMethods.TerminalKill, params)
-	return err
-}
-
-// Agent protocol methods - these are called by the agent
-
-// Initialize starts the connection handshake with the agent
 func (c *ClientSideConnection) Initialize(ctx context.Context, params *InitializeRequest) (*InitializeResponse, error) {
-	data, err := c.conn.SendRequest(ctx, AgentMethods.Initialize, params)
-	if err != nil {
-		return nil, err
-	}
-	var response InitializeResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+	return sendRequest[InitializeResponse](ctx, c.conn, AgentMethods.Initialize, params)
 }
 
-// Authenticate performs authentication with the agent
-func (c *ClientSideConnection) Authenticate(ctx context.Context, params *AuthenticateRequest) error {
-	_, err := c.conn.SendRequest(ctx, AgentMethods.Authenticate, params)
-	return err
+func (c *ClientSideConnection) Authenticate(ctx context.Context, params *AuthenticateRequest) (*AuthenticateResponse, error) {
+	return sendRequest[AuthenticateResponse](ctx, c.conn, AgentMethods.Authenticate, params)
 }
 
-// NewSession creates a new conversation session with the agent
 func (c *ClientSideConnection) NewSession(ctx context.Context, params *NewSessionRequest) (*NewSessionResponse, error) {
-	data, err := c.conn.SendRequest(ctx, AgentMethods.SessionNew, params)
-	if err != nil {
-		return nil, err
-	}
-	var response NewSessionResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+	return sendRequest[NewSessionResponse](ctx, c.conn, AgentMethods.SessionNew, params)
 }
 
-// LoadSession loads an existing session (if supported)
 func (c *ClientSideConnection) LoadSession(ctx context.Context, params *LoadSessionRequest) (*LoadSessionResponse, error) {
-	data, err := c.conn.SendRequest(ctx, AgentMethods.SessionLoad, params)
-	if err != nil {
-		return nil, err
-	}
-	var response LoadSessionResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+	return sendRequest[LoadSessionResponse](ctx, c.conn, AgentMethods.SessionLoad, params)
 }
 
-// SetSessionMode changes session mode (unstable)
-func (c *ClientSideConnection) SetSessionMode(ctx context.Context, params *SetSessionModeRequest) error {
-	_, err := c.conn.SendRequest(ctx, AgentMethods.SessionSetMode, params)
-	return err
+func (c *ClientSideConnection) ListSessions(ctx context.Context, params *ListSessionsRequest) (*ListSessionsResponse, error) {
+	return sendRequest[ListSessionsResponse](ctx, c.conn, AgentMethods.SessionList, params)
 }
 
-// Prompt sends a user prompt to the agent
+func (c *ClientSideConnection) SetSessionMode(ctx context.Context, params *SetSessionModeRequest) (*SetSessionModeResponse, error) {
+	return sendRequest[SetSessionModeResponse](ctx, c.conn, AgentMethods.SessionSetMode, params)
+}
+
+func (c *ClientSideConnection) SetSessionConfigOption(ctx context.Context, params *SetSessionConfigOptionRequest) (*SetSessionConfigOptionResponse, error) {
+	return sendRequest[SetSessionConfigOptionResponse](ctx, c.conn, AgentMethods.SessionSetConfigOption, params)
+}
+
 func (c *ClientSideConnection) Prompt(ctx context.Context, params *PromptRequest) (*PromptResponse, error) {
-	data, err := c.conn.SendRequest(ctx, AgentMethods.SessionPrompt, params)
-	if err != nil {
-		return nil, err
-	}
-	var response PromptResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+	return sendRequest[PromptResponse](ctx, c.conn, AgentMethods.SessionPrompt, params)
 }
 
-// Cancel sends a cancellation notification to the agent
 func (c *ClientSideConnection) Cancel(ctx context.Context, params *CancelNotification) error {
 	return c.conn.SendNotification(ctx, AgentMethods.SessionCancel, params)
 }
 
-// handleIncomingMethod handles incoming JSON-RPC method calls from the agent
-func (c *ClientSideConnection) handleIncomingMethod(method string, params json.RawMessage) (any, error) {
-	ctx := context.Background() // TODO: Add proper context handling
+// --- Unstable outbound agent-calling methods ---
 
-	switch method {
-	case ClientMethods.SessionUpdate:
-		var sessionNotification SessionNotification
-		if err := json.Unmarshal(params, &sessionNotification); err != nil {
-			return nil, err
-		}
-		return nil, c.impl.SessionUpdate(ctx, &sessionNotification)
-
-	case ClientMethods.SessionRequestPermission:
-		var permissionRequest RequestPermissionRequest
-		if err := json.Unmarshal(params, &permissionRequest); err != nil {
-			return nil, err
-		}
-		return c.impl.RequestPermission(ctx, &permissionRequest)
-
-	case ClientMethods.FsReadTextFile:
-		var readRequest ReadTextFileRequest
-		if err := json.Unmarshal(params, &readRequest); err != nil {
-			return nil, err
-		}
-		return c.impl.ReadTextFile(ctx, &readRequest)
-
-	case ClientMethods.FsWriteTextFile:
-		var writeRequest WriteTextFileRequest
-		if err := json.Unmarshal(params, &writeRequest); err != nil {
-			return nil, err
-		}
-		err := c.impl.WriteTextFile(ctx, &writeRequest)
-		return nil, err
-
-	case ClientMethods.TerminalCreate:
-		var terminalRequest CreateTerminalRequest
-		if err := json.Unmarshal(params, &terminalRequest); err != nil {
-			return nil, err
-		}
-		return c.impl.CreateTerminal(ctx, &terminalRequest)
-
-	case ClientMethods.TerminalOutput:
-		var outputRequest TerminalOutputRequest
-		if err := json.Unmarshal(params, &outputRequest); err != nil {
-			return nil, err
-		}
-		return c.impl.TerminalOutput(ctx, &outputRequest)
-
-	case ClientMethods.TerminalRelease:
-		var releaseRequest ReleaseTerminalRequest
-		if err := json.Unmarshal(params, &releaseRequest); err != nil {
-			return nil, err
-		}
-		return nil, c.impl.ReleaseTerminal(ctx, &releaseRequest)
-
-	case ClientMethods.TerminalWaitForExit:
-		var waitRequest WaitForTerminalExitRequest
-		if err := json.Unmarshal(params, &waitRequest); err != nil {
-			return nil, err
-		}
-		return c.impl.WaitForTerminalExit(ctx, &waitRequest)
-
-	case ClientMethods.TerminalKill:
-		var killRequest KillTerminalCommandRequest
-		if err := json.Unmarshal(params, &killRequest); err != nil {
-			return nil, err
-		}
-		return nil, c.impl.KillTerminalCommand(ctx, &killRequest)
-
-	default:
-		return nil, fmt.Errorf("method not found: %s", method)
-	}
+func (c *ClientSideConnection) ForkSession(ctx context.Context, params *ForkSessionRequest) (*ForkSessionResponse, error) {
+	return sendRequest[ForkSessionResponse](ctx, c.conn, AgentMethodsUnstable.SessionFork, params)
 }
 
-// Start begins processing JSON-RPC messages
-func (c *ClientSideConnection) Start(ctx context.Context) error {
-	return c.conn.Start(ctx)
+func (c *ClientSideConnection) ResumeSession(ctx context.Context, params *ResumeSessionRequest) (*ResumeSessionResponse, error) {
+	return sendRequest[ResumeSessionResponse](ctx, c.conn, AgentMethodsUnstable.SessionResume, params)
+}
+
+func (c *ClientSideConnection) CloseSession(ctx context.Context, params *CloseSessionRequest) (*CloseSessionResponse, error) {
+	return sendRequest[CloseSessionResponse](ctx, c.conn, AgentMethodsUnstable.SessionClose, params)
+}
+
+func (c *ClientSideConnection) SetSessionModel(ctx context.Context, params *SetSessionModelRequest) (*SetSessionModelResponse, error) {
+	return sendRequest[SetSessionModelResponse](ctx, c.conn, AgentMethodsUnstable.SessionSetModel, params)
+}
+
+// --- Extension methods ---
+
+func (c *ClientSideConnection) ExtMethod(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	return c.conn.SendRequest(ctx, method, params)
+}
+
+func (c *ClientSideConnection) ExtNotification(ctx context.Context, method string, params any) error {
+	return c.conn.SendNotification(ctx, method, params)
+}
+
+// --- Incoming request handler ---
+
+func (c *ClientSideConnection) handleIncomingMethod(ctx context.Context, method string, params json.RawMessage) (any, error) {
+	switch method {
+	case ClientMethods.SessionUpdate:
+		return unmarshalAndCallVoid(ctx, params, c.impl.SessionUpdate)
+	case ClientMethods.SessionRequestPermission:
+		return unmarshalAndCall(ctx, params, c.impl.RequestPermission)
+	case ClientMethods.FSReadTextFile:
+		return unmarshalAndCall(ctx, params, c.impl.ReadTextFile)
+	case ClientMethods.FSWriteTextFile:
+		return unmarshalAndCall(ctx, params, c.impl.WriteTextFile)
+	case ClientMethods.TerminalCreate:
+		return unmarshalAndCall(ctx, params, c.impl.CreateTerminal)
+	case ClientMethods.TerminalOutput:
+		return unmarshalAndCall(ctx, params, c.impl.TerminalOutput)
+	case ClientMethods.TerminalRelease:
+		return unmarshalAndCall(ctx, params, c.impl.ReleaseTerminal)
+	case ClientMethods.TerminalWaitForExit:
+		return unmarshalAndCall(ctx, params, c.impl.WaitForTerminalExit)
+	case ClientMethods.TerminalKill:
+		return unmarshalAndCall(ctx, params, c.impl.KillTerminalCommand)
+	default:
+		if handler, ok := c.impl.(ExtMethodHandler); ok {
+			return handler.ExtMethod(ctx, method, params)
+		}
+		return nil, ErrMethodNotFound(method)
+	}
 }

@@ -99,7 +99,7 @@ func main() {
 	}
 	
 	if err := app.Run(context.Background(), os.Args); err != nil {
-		// Only exit with error code if it's a real error
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -125,17 +125,35 @@ func executeGenerate(_ context.Context, cmd *cli.Command) error {
 		fmt.Printf("Warning: Failed to load config file: %v\n", err)
 	}
 
-	// Validate that we have at least an input file after merging with config
-	if config.InputFile == "" {
-		return NewCLIError("input file is required (either via --input flag or .schema.yaml config)", nil)
-	}
-
 	if err := config.Validate(); err != nil {
 		return err
 	}
 
+	targets := config.GetTargets()
+	for _, target := range targets {
+		targetConfig := &Config{
+			InputFile:       target.InputFile,
+			MetaFile:        target.MetaFile,
+			OutputFile:      target.OutputFile,
+			ExcludeFrom:     target.ExcludeFrom,
+			ExcludeMetaFrom: target.ExcludeMetaFrom,
+			PackageName:     config.PackageName,
+			IgnoreErrors:    config.IgnoreErrors,
+			IgnoreTypes:     config.IgnoreTypes,
+		}
+
+		if err := generateTarget(targetConfig); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// generateTarget generates Go code for a single target.
+func generateTarget(config *Config) error {
 	generator := NewGenerator(config)
-	
+
 	// Load metadata if provided
 	if err := generator.LoadMetadata(); err != nil {
 		return NewGenerationError("failed to load metadata", err).
@@ -172,7 +190,7 @@ func executeGenerate(_ context.Context, cmd *cli.Command) error {
 
 	// Print skipped items if any
 	if generator.GetSkippedCount() > 0 {
-		fmt.Printf("Successfully generated types, skipped %d definitions: %v\n", 
+		fmt.Printf("Skipped %d definitions: %v\n",
 			generator.GetSkippedCount(), generator.GetSkippedItems())
 	}
 

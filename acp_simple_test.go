@@ -12,15 +12,15 @@ func TestProtocolVersion(t *testing.T) {
 	}
 }
 
-func TestSessionId(t *testing.T) {
-	sessionId := SessionId("test-session-123")
+func TestSessionID(t *testing.T) {
+	sessionId := SessionID("test-session-123")
 	if string(sessionId) != "test-session-123" {
 		t.Errorf("Expected session ID 'test-session-123', got '%s'", string(sessionId))
 	}
 }
 
-func TestToolCallId(t *testing.T) {
-	toolCallId := ToolCallId("tool-call-456")
+func TestToolCallID(t *testing.T) {
+	toolCallId := ToolCallID("tool-call-456")
 	if string(toolCallId) != "tool-call-456" {
 		t.Errorf("Expected tool call ID 'tool-call-456', got '%s'", string(toolCallId))
 	}
@@ -29,16 +29,16 @@ func TestToolCallId(t *testing.T) {
 func TestNewContentBlockText(t *testing.T) {
 	text := "Hello, world!"
 	contentBlock := NewContentBlockText(text)
-	
-	if !contentBlock.IsText() {
+
+	textBlock, ok := contentBlock.AsText()
+	if !ok {
 		t.Error("Expected content block to be text type")
 	}
-	
-	textBlock := contentBlock.GetText()
+
 	if textBlock.Text != text {
 		t.Errorf("Expected text '%s', got '%s'", text, textBlock.Text)
 	}
-	
+
 	if textBlock.Type != "text" {
 		t.Errorf("Expected type 'text', got '%s'", textBlock.Type)
 	}
@@ -48,32 +48,33 @@ func TestNewSessionUpdateAgentMessageChunk(t *testing.T) {
 	text := "Agent response"
 	contentBlock := NewContentBlockText(text)
 	update := NewSessionUpdateAgentMessageChunk(contentBlock)
-	
-	if !update.IsAgentmessagechunk() {
+
+	chunk, ok := update.AsAgentMessageChunk()
+	if !ok {
 		t.Error("Expected session update to be agent message chunk type")
 	}
-	
-	chunk := update.GetAgentmessagechunk()
-	if !chunk.Content.IsText() {
+
+	textBlock, ok := chunk.Content.AsText()
+	if !ok {
 		t.Error("Expected chunk content to be text type")
 	}
-	
-	if chunk.Content.GetText().Text != text {
-		t.Errorf("Expected chunk text '%s', got '%s'", text, chunk.Content.GetText().Text)
+
+	if textBlock.Text != text {
+		t.Errorf("Expected chunk text '%s', got '%s'", text, textBlock.Text)
 	}
 }
 
 func TestNewRequestPermissionOutcomeSelected(t *testing.T) {
-	optionId := PermissionOptionId("allow")
+	optionId := PermissionOptionID("allow")
 	outcome := NewRequestPermissionOutcomeSelected(optionId)
-	
-	if !outcome.IsSelected() {
+
+	selected, ok := outcome.AsSelected()
+	if !ok {
 		t.Error("Expected outcome to be selected type")
 	}
-	
-	selected := outcome.GetSelected()
-	if selected.OptionId != optionId {
-		t.Errorf("Expected option ID '%s', got '%s'", optionId, selected.OptionId)
+
+	if selected.OptionID != optionId {
+		t.Errorf("Expected option ID '%s', got '%s'", optionId, selected.OptionID)
 	}
 }
 
@@ -81,32 +82,32 @@ func TestPermissionOptions(t *testing.T) {
 	option := PermissionOption{
 		Kind:     PermissionOptionKindAllowOnce,
 		Name:     "Allow this operation",
-		OptionId: PermissionOptionId("allow"),
+		OptionID: PermissionOptionID("allow"),
 	}
-	
+
 	if option.Kind != PermissionOptionKindAllowOnce {
 		t.Errorf("Expected kind '%s', got '%s'", PermissionOptionKindAllowOnce, option.Kind)
 	}
-	
+
 	if option.Name != "Allow this operation" {
 		t.Errorf("Expected name 'Allow this operation', got '%s'", option.Name)
 	}
-	
-	if option.OptionId != PermissionOptionId("allow") {
-		t.Errorf("Expected option ID 'allow', got '%s'", option.OptionId)
+
+	if option.OptionID != PermissionOptionID("allow") {
+		t.Errorf("Expected option ID 'allow', got '%s'", option.OptionID)
 	}
 }
 
 func TestToolCallLocation(t *testing.T) {
 	location := ToolCallLocation{
 		Path: "/path/to/file.txt",
-		Line: nil, // Line is optional
+		Line: nil,
 	}
-	
+
 	if location.Path != "/path/to/file.txt" {
 		t.Errorf("Expected path '/path/to/file.txt', got '%s'", location.Path)
 	}
-	
+
 	if location.Line != nil {
 		t.Errorf("Expected line to be nil, got %v", location.Line)
 	}
@@ -116,19 +117,19 @@ func TestToolCallContentContent(t *testing.T) {
 	text := "Tool output"
 	contentBlock := NewContentBlockText(text)
 	toolCallContent := NewToolCallContentContent(contentBlock)
-	
-	// Test that we can create and access the content
-	if !toolCallContent.IsContent() {
+
+	content, ok := toolCallContent.AsContent()
+	if !ok {
 		t.Error("Expected tool call content to be content type")
 	}
-	
-	content := toolCallContent.GetContent()
-	if !content.Content.IsText() {
+
+	textBlock, ok := content.Content.Content.AsText()
+	if !ok {
 		t.Error("Expected content to be text type")
 	}
-	
-	if content.Content.GetText().Text != text {
-		t.Errorf("Expected text '%s', got '%s'", text, content.Content.GetText().Text)
+
+	if textBlock.Text != text {
+		t.Errorf("Expected text '%s', got '%s'", text, textBlock.Text)
 	}
 }
 
@@ -140,7 +141,7 @@ func TestStopReasons(t *testing.T) {
 		StopReasonRefusal,
 		StopReasonCancelled,
 	}
-	
+
 	expectedReasons := []string{
 		"end_turn",
 		"max_tokens",
@@ -148,7 +149,7 @@ func TestStopReasons(t *testing.T) {
 		"refusal",
 		"cancelled",
 	}
-	
+
 	for i, reason := range reasons {
 		if string(reason) != expectedReasons[i] {
 			t.Errorf("Expected reason '%s', got '%s'", expectedReasons[i], string(reason))
@@ -168,7 +169,7 @@ func TestToolKinds(t *testing.T) {
 		ToolKindFetch,
 		ToolKindOther,
 	}
-	
+
 	expectedKinds := []string{
 		"read",
 		"edit",
@@ -180,7 +181,7 @@ func TestToolKinds(t *testing.T) {
 		"fetch",
 		"other",
 	}
-	
+
 	for i, kind := range kinds {
 		if string(kind) != expectedKinds[i] {
 			t.Errorf("Expected kind '%s', got '%s'", expectedKinds[i], string(kind))
@@ -195,14 +196,14 @@ func TestToolCallStatuses(t *testing.T) {
 		ToolCallStatusCompleted,
 		ToolCallStatusFailed,
 	}
-	
+
 	expectedStatuses := []string{
 		"pending",
-		"in_progress", 
+		"in_progress",
 		"completed",
 		"failed",
 	}
-	
+
 	for i, status := range statuses {
 		if string(status) != expectedStatuses[i] {
 			t.Errorf("Expected status '%s', got '%s'", expectedStatuses[i], string(status))
@@ -210,27 +211,16 @@ func TestToolCallStatuses(t *testing.T) {
 	}
 }
 
-// Test helper functions
-func TestHelperFunctions(t *testing.T) {
-	// Test StringPtr
-	str := "test string"
-	strPtr := StringPtr(str)
-	if strPtr == nil || *strPtr != str {
-		t.Errorf("StringPtr failed: expected '%s', got %v", str, strPtr)
+func TestPointerCreation(t *testing.T) {
+	// Go 1.26+ supports new(constant)
+	kindPtr := new(ToolKindRead)
+	if kindPtr == nil || *kindPtr != ToolKindRead {
+		t.Errorf("ToolKind pointer failed: expected '%s', got %v", ToolKindRead, kindPtr)
 	}
-	
-	// Test ToolKindPtr
-	kind := ToolKindRead
-	kindPtr := ToolKindPtr(kind)
-	if kindPtr == nil || *kindPtr != kind {
-		t.Errorf("ToolKindPtr failed: expected '%s', got %v", kind, kindPtr)
-	}
-	
-	// Test ToolCallStatusPtr
-	status := ToolCallStatusCompleted
-	statusPtr := ToolCallStatusPtr(status)
-	if statusPtr == nil || *statusPtr != status {
-		t.Errorf("ToolCallStatusPtr failed: expected '%s', got %v", status, statusPtr)
+
+	statusPtr := new(ToolCallStatusCompleted)
+	if statusPtr == nil || *statusPtr != ToolCallStatusCompleted {
+		t.Errorf("ToolCallStatus pointer failed: expected '%s', got %v", ToolCallStatusCompleted, statusPtr)
 	}
 }
 
@@ -239,29 +229,29 @@ func TestInitializeRequest(t *testing.T) {
 	req := &InitializeRequest{
 		ProtocolVersion: ProtocolVersion(1),
 		ClientCapabilities: &ClientCapabilities{
-			Fs: &FileSystemCapability{
+			FS: &FileSystemCapabilities{
 				ReadTextFile:  true,
 				WriteTextFile: true,
 			},
 			Terminal: false,
 		},
 	}
-	
+
 	if req.ProtocolVersion != ProtocolVersion(1) {
 		t.Errorf("Expected protocol version 1, got %d", req.ProtocolVersion)
 	}
-	
+
 	if req.ClientCapabilities == nil {
 		t.Error("Expected client capabilities, got nil")
 	} else {
-		if req.ClientCapabilities.Fs == nil {
+		if req.ClientCapabilities.FS == nil {
 			t.Error("Expected filesystem capabilities, got nil")
 		} else {
-			if !req.ClientCapabilities.Fs.ReadTextFile {
+			if !req.ClientCapabilities.FS.ReadTextFile {
 				t.Error("Expected ReadTextFile to be true")
 			}
-			if !req.ClientCapabilities.Fs.WriteTextFile {
-				t.Error("Expected WriteTextFile to be true") 
+			if !req.ClientCapabilities.FS.WriteTextFile {
+				t.Error("Expected WriteTextFile to be true")
 			}
 		}
 		if req.ClientCapabilities.Terminal {
@@ -275,9 +265,9 @@ func TestInitializeResponse(t *testing.T) {
 		ProtocolVersion: ProtocolVersion(1),
 		AgentCapabilities: &AgentCapabilities{
 			LoadSession: true,
-			McpCapabilities: &McpCapabilities{
-				Http: false,
-				Sse:  true,
+			MCPCapabilities: &MCPCapabilities{
+				HTTP: false,
+				SSE:  true,
 			},
 			PromptCapabilities: &PromptCapabilities{
 				Audio:           false,
@@ -287,37 +277,37 @@ func TestInitializeResponse(t *testing.T) {
 		},
 		AuthMethods: []AuthMethod{
 			{
-				Id:          AuthMethodId("oauth"),
+				ID:          "oauth",
 				Name:        "OAuth Authentication",
 				Description: "OAuth 2.0 authentication",
 			},
 		},
 	}
-	
+
 	if resp.ProtocolVersion != ProtocolVersion(1) {
 		t.Errorf("Expected protocol version 1, got %d", resp.ProtocolVersion)
 	}
-	
+
 	if resp.AgentCapabilities == nil {
 		t.Error("Expected agent capabilities, got nil")
 		return
 	}
-	
+
 	if !resp.AgentCapabilities.LoadSession {
 		t.Error("Expected LoadSession to be true")
 	}
-	
-	if resp.AgentCapabilities.McpCapabilities == nil {
+
+	if resp.AgentCapabilities.MCPCapabilities == nil {
 		t.Error("Expected MCP capabilities, got nil")
 	} else {
-		if resp.AgentCapabilities.McpCapabilities.Http {
+		if resp.AgentCapabilities.MCPCapabilities.HTTP {
 			t.Error("Expected HTTP to be false")
 		}
-		if !resp.AgentCapabilities.McpCapabilities.Sse {
+		if !resp.AgentCapabilities.MCPCapabilities.SSE {
 			t.Error("Expected SSE to be true")
 		}
 	}
-	
+
 	if resp.AgentCapabilities.PromptCapabilities == nil {
 		t.Error("Expected prompt capabilities, got nil")
 	} else {
@@ -331,13 +321,13 @@ func TestInitializeResponse(t *testing.T) {
 			t.Error("Expected Image to be true")
 		}
 	}
-	
+
 	if len(resp.AuthMethods) != 1 {
 		t.Errorf("Expected 1 auth method, got %d", len(resp.AuthMethods))
 	} else {
 		authMethod := resp.AuthMethods[0]
-		if authMethod.Id != AuthMethodId("oauth") {
-			t.Errorf("Expected auth method ID 'oauth', got '%s'", authMethod.Id)
+		if authMethod.ID != "oauth" {
+			t.Errorf("Expected auth method ID 'oauth', got '%s'", authMethod.ID)
 		}
 		if authMethod.Name != "OAuth Authentication" {
 			t.Errorf("Expected auth method name 'OAuth Authentication', got '%s'", authMethod.Name)

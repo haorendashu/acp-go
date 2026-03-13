@@ -1,9 +1,2 @@
-# LLMs
-/.llms
-/.claude
-/.idea
-CLAUDE.md
-# macOS
 .DS_Store
-# reference codes
-/agent-client-protocol
+/reference

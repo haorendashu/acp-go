@@ -40,17 +40,17 @@ func (tc *TestConnection) Close() {
 
 // TestClient implements Client interface for integration testing
 type TestClient struct {
-	writeTextFileHandler     func(*WriteTextFileRequest) error
+	writeTextFileHandler     func(*WriteTextFileRequest) (*WriteTextFileResponse, error)
 	readTextFileHandler      func(*ReadTextFileRequest) (*ReadTextFileResponse, error)
 	requestPermissionHandler func(*RequestPermissionRequest) (*RequestPermissionResponse, error)
 	sessionUpdateHandler     func(*SessionNotification) error
 }
 
-func (c *TestClient) WriteTextFile(ctx context.Context, params *WriteTextFileRequest) error {
+func (c *TestClient) WriteTextFile(ctx context.Context, params *WriteTextFileRequest) (*WriteTextFileResponse, error) {
 	if c.writeTextFileHandler != nil {
 		return c.writeTextFileHandler(params)
 	}
-	return nil
+	return &WriteTextFileResponse{}, nil
 }
 
 func (c *TestClient) ReadTextFile(ctx context.Context, params *ReadTextFileRequest) (*ReadTextFileResponse, error) {
@@ -65,7 +65,7 @@ func (c *TestClient) RequestPermission(ctx context.Context, params *RequestPermi
 		return c.requestPermissionHandler(params)
 	}
 	return &RequestPermissionResponse{
-		Outcome: NewRequestPermissionOutcomeSelected(PermissionOptionId("allow")),
+		Outcome: NewRequestPermissionOutcomeSelected(PermissionOptionID("allow")),
 	}, nil
 }
 
@@ -77,15 +77,15 @@ func (c *TestClient) SessionUpdate(ctx context.Context, params *SessionNotificat
 }
 
 func (c *TestClient) CreateTerminal(ctx context.Context, params *CreateTerminalRequest) (*CreateTerminalResponse, error) {
-	return &CreateTerminalResponse{TerminalId: "mock-terminal"}, nil
+	return &CreateTerminalResponse{TerminalID: "mock-terminal"}, nil
 }
 
 func (c *TestClient) TerminalOutput(ctx context.Context, params *TerminalOutputRequest) (*TerminalOutputResponse, error) {
 	return &TerminalOutputResponse{Output: "mock output", Truncated: false}, nil
 }
 
-func (c *TestClient) ReleaseTerminal(ctx context.Context, params *ReleaseTerminalRequest) error {
-	return nil
+func (c *TestClient) ReleaseTerminal(ctx context.Context, params *ReleaseTerminalRequest) (*ReleaseTerminalResponse, error) {
+	return &ReleaseTerminalResponse{}, nil
 }
 
 func (c *TestClient) WaitForTerminalExit(ctx context.Context, params *WaitForTerminalExitRequest) (*WaitForTerminalExitResponse, error) {
@@ -93,19 +93,21 @@ func (c *TestClient) WaitForTerminalExit(ctx context.Context, params *WaitForTer
 	return &WaitForTerminalExitResponse{ExitCode: &exitCode}, nil
 }
 
-func (c *TestClient) KillTerminalCommand(ctx context.Context, params *KillTerminalCommandRequest) error {
-	return nil
+func (c *TestClient) KillTerminalCommand(ctx context.Context, params *KillTerminalRequest) (*KillTerminalResponse, error) {
+	return &KillTerminalResponse{}, nil
 }
 
 // TestAgent implements Agent interface for integration testing
 type TestAgent struct {
-	initializeHandler     func(*InitializeRequest) (*InitializeResponse, error)
-	newSessionHandler     func(*NewSessionRequest) (*NewSessionResponse, error)
-	loadSessionHandler    func(*LoadSessionRequest) (*LoadSessionResponse, error)
-	setSessionModeHandler func(*SetSessionModeRequest) error
-	authenticateHandler   func(*AuthenticateRequest) error
-	promptHandler         func(*PromptRequest) (*PromptResponse, error)
-	cancelHandler         func(*CancelNotification) error
+	initializeHandler          func(*InitializeRequest) (*InitializeResponse, error)
+	newSessionHandler          func(*NewSessionRequest) (*NewSessionResponse, error)
+	loadSessionHandler         func(*LoadSessionRequest) (*LoadSessionResponse, error)
+	listSessionsHandler        func(*ListSessionsRequest) (*ListSessionsResponse, error)
+	setSessionModeHandler      func(*SetSessionModeRequest) (*SetSessionModeResponse, error)
+	setSessionConfigHandler    func(*SetSessionConfigOptionRequest) (*SetSessionConfigOptionResponse, error)
+	authenticateHandler        func(*AuthenticateRequest) (*AuthenticateResponse, error)
+	promptHandler              func(*PromptRequest) (*PromptResponse, error)
+	cancelHandler              func(*CancelNotification) error
 }
 
 func (a *TestAgent) Initialize(ctx context.Context, params *InitializeRequest) (*InitializeResponse, error) {
@@ -123,7 +125,7 @@ func (a *TestAgent) NewSession(ctx context.Context, params *NewSessionRequest) (
 	if a.newSessionHandler != nil {
 		return a.newSessionHandler(params)
 	}
-	return &NewSessionResponse{SessionId: SessionId("test-session")}, nil
+	return &NewSessionResponse{SessionID: SessionID("test-session")}, nil
 }
 
 func (a *TestAgent) LoadSession(ctx context.Context, params *LoadSessionRequest) (*LoadSessionResponse, error) {
@@ -133,18 +135,32 @@ func (a *TestAgent) LoadSession(ctx context.Context, params *LoadSessionRequest)
 	return &LoadSessionResponse{}, nil
 }
 
-func (a *TestAgent) SetSessionMode(ctx context.Context, params *SetSessionModeRequest) error {
+func (a *TestAgent) ListSessions(ctx context.Context, params *ListSessionsRequest) (*ListSessionsResponse, error) {
+	if a.listSessionsHandler != nil {
+		return a.listSessionsHandler(params)
+	}
+	return &ListSessionsResponse{}, nil
+}
+
+func (a *TestAgent) SetSessionMode(ctx context.Context, params *SetSessionModeRequest) (*SetSessionModeResponse, error) {
 	if a.setSessionModeHandler != nil {
 		return a.setSessionModeHandler(params)
 	}
-	return nil
+	return &SetSessionModeResponse{}, nil
 }
 
-func (a *TestAgent) Authenticate(ctx context.Context, params *AuthenticateRequest) error {
+func (a *TestAgent) SetSessionConfigOption(ctx context.Context, params *SetSessionConfigOptionRequest) (*SetSessionConfigOptionResponse, error) {
+	if a.setSessionConfigHandler != nil {
+		return a.setSessionConfigHandler(params)
+	}
+	return &SetSessionConfigOptionResponse{ConfigOptions: []SessionConfigOption{}}, nil
+}
+
+func (a *TestAgent) Authenticate(ctx context.Context, params *AuthenticateRequest) (*AuthenticateResponse, error) {
 	if a.authenticateHandler != nil {
 		return a.authenticateHandler(params)
 	}
-	return nil
+	return &AuthenticateResponse{}, nil
 }
 
 func (a *TestAgent) Prompt(ctx context.Context, params *PromptRequest) (*PromptResponse, error) {
@@ -167,8 +183,8 @@ func TestBidirectionalCommunicationErrors(t *testing.T) {
 
 	// Create client that throws errors
 	testClient := &TestClient{
-		writeTextFileHandler: func(*WriteTextFileRequest) error {
-			return fmt.Errorf("write failed")
+		writeTextFileHandler: func(*WriteTextFileRequest) (*WriteTextFileResponse, error) {
+			return nil, fmt.Errorf("write failed")
 		},
 		readTextFileHandler: func(*ReadTextFileRequest) (*ReadTextFileResponse, error) {
 			return nil, fmt.Errorf("read failed")
@@ -189,8 +205,8 @@ func TestBidirectionalCommunicationErrors(t *testing.T) {
 		loadSessionHandler: func(*LoadSessionRequest) (*LoadSessionResponse, error) {
 			return nil, fmt.Errorf("failed to load session")
 		},
-		authenticateHandler: func(*AuthenticateRequest) error {
-			return fmt.Errorf("authentication failed")
+		authenticateHandler: func(*AuthenticateRequest) (*AuthenticateResponse, error) {
+			return nil, fmt.Errorf("authentication failed")
 		},
 		promptHandler: func(*PromptRequest) (*PromptResponse, error) {
 			return nil, fmt.Errorf("prompt failed")
@@ -214,19 +230,17 @@ func TestBidirectionalCommunicationErrors(t *testing.T) {
 	// Give connections time to start
 	time.Sleep(100 * time.Millisecond)
 
-	// Test error handling in client->agent direction (use clientConnection to call client methods that should error)
-	// Use a retry mechanism to handle race conditions in bidirectional communication
+	// Test error handling in client->agent direction
 	var writeErr error
-	for i := 0; i < 3; i++ {
-		writeErr = clientConnection.Client().WriteTextFile(ctx, &WriteTextFileRequest{
+	for range 3 {
+		_, writeErr = clientConnection.Client().WriteTextFile(ctx, &WriteTextFileRequest{
 			Path:      "/test.txt",
 			Content:   "test",
-			SessionId: SessionId("test-session"),
+			SessionID: SessionID("test-session"),
 		})
 		if writeErr != nil {
-			break // Got expected error
+			break
 		}
-		// Race condition occurred, retry after small delay
 		time.Sleep(10 * time.Millisecond)
 	}
 	if writeErr == nil {
@@ -235,17 +249,16 @@ func TestBidirectionalCommunicationErrors(t *testing.T) {
 		t.Errorf("Expected error containing 'write failed', got: %v", writeErr)
 	}
 
-	// Test error handling in agent->client direction with retry mechanism
-	var sessionErr error  
-	for i := 0; i < 3; i++ {
+	// Test error handling in agent->client direction
+	var sessionErr error
+	for range 3 {
 		_, sessionErr = agentConnection.NewSession(ctx, &NewSessionRequest{
 			Cwd:        "/test",
-			McpServers: []McpServer{},
+			MCPServers: []MCPServer{},
 		})
 		if sessionErr != nil {
-			break // Got expected error
+			break
 		}
-		// Race condition occurred, retry after small delay
 		time.Sleep(10 * time.Millisecond)
 	}
 	if sessionErr == nil {
@@ -263,20 +276,20 @@ func TestConcurrentRequests(t *testing.T) {
 
 	// Create client
 	testClient := &TestClient{
-		writeTextFileHandler: func(params *WriteTextFileRequest) error {
+		writeTextFileHandler: func(params *WriteTextFileRequest) (*WriteTextFileResponse, error) {
 			atomic.AddInt64(&requestCount, 1)
 			currentCount := atomic.LoadInt64(&requestCount)
 			// Simulate work
 			time.Sleep(40 * time.Millisecond)
 			t.Logf("Write request %d completed", currentCount)
-			return nil
+			return &WriteTextFileResponse{}, nil
 		},
 		readTextFileHandler: func(params *ReadTextFileRequest) (*ReadTextFileResponse, error) {
 			return &ReadTextFileResponse{Content: fmt.Sprintf("Content of %s", params.Path)}, nil
 		},
 		requestPermissionHandler: func(*RequestPermissionRequest) (*RequestPermissionResponse, error) {
 			return &RequestPermissionResponse{
-				Outcome: NewRequestPermissionOutcomeSelected(PermissionOptionId("allow")),
+				Outcome: NewRequestPermissionOutcomeSelected(PermissionOptionID("allow")),
 			}, nil
 		},
 	}
@@ -291,7 +304,7 @@ func TestConcurrentRequests(t *testing.T) {
 			}, nil
 		},
 		newSessionHandler: func(*NewSessionRequest) (*NewSessionResponse, error) {
-			return &NewSessionResponse{SessionId: SessionId("test-session")}, nil
+			return &NewSessionResponse{SessionID: SessionID("test-session")}, nil
 		},
 		promptHandler: func(*PromptRequest) (*PromptResponse, error) {
 			return &PromptResponse{StopReason: StopReasonEndTurn}, nil
@@ -321,13 +334,13 @@ func TestConcurrentRequests(t *testing.T) {
 
 	errors := make([]error, 3)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		go func(index int) {
 			defer wg.Done()
-			err := clientConnection.Client().WriteTextFile(ctx, &WriteTextFileRequest{
+			_, err := clientConnection.Client().WriteTextFile(ctx, &WriteTextFileRequest{
 				Path:      fmt.Sprintf("/file%d.txt", index+1),
 				Content:   fmt.Sprintf("content%d", index+1),
-				SessionId: SessionId("session1"),
+				SessionID: SessionID("session1"),
 			})
 			errors[index] = err
 		}(i)
@@ -363,9 +376,9 @@ func TestMessageOrdering(t *testing.T) {
 
 	// Create client
 	testClient := &TestClient{
-		writeTextFileHandler: func(params *WriteTextFileRequest) error {
+		writeTextFileHandler: func(params *WriteTextFileRequest) (*WriteTextFileResponse, error) {
 			addToLog(fmt.Sprintf("writeTextFile called: %s", params.Path))
-			return nil
+			return &WriteTextFileResponse{}, nil
 		},
 		readTextFileHandler: func(params *ReadTextFileRequest) (*ReadTextFileResponse, error) {
 			addToLog(fmt.Sprintf("readTextFile called: %s", params.Path))
@@ -374,7 +387,7 @@ func TestMessageOrdering(t *testing.T) {
 		requestPermissionHandler: func(params *RequestPermissionRequest) (*RequestPermissionResponse, error) {
 			addToLog(fmt.Sprintf("requestPermission called: %s", params.ToolCall.Title))
 			return &RequestPermissionResponse{
-				Outcome: NewRequestPermissionOutcomeSelected(PermissionOptionId("allow")),
+				Outcome: NewRequestPermissionOutcomeSelected(PermissionOptionID("allow")),
 			}, nil
 		},
 		sessionUpdateHandler: func(params *SessionNotification) error {
@@ -394,22 +407,22 @@ func TestMessageOrdering(t *testing.T) {
 		},
 		newSessionHandler: func(request *NewSessionRequest) (*NewSessionResponse, error) {
 			addToLog(fmt.Sprintf("newSession called: %s", request.Cwd))
-			return &NewSessionResponse{SessionId: SessionId("test-session")}, nil
+			return &NewSessionResponse{SessionID: SessionID("test-session")}, nil
 		},
 		loadSessionHandler: func(params *LoadSessionRequest) (*LoadSessionResponse, error) {
-			addToLog(fmt.Sprintf("loadSession called: %s", params.SessionId))
+			addToLog(fmt.Sprintf("loadSession called: %s", params.SessionID))
 			return &LoadSessionResponse{}, nil
 		},
-		authenticateHandler: func(params *AuthenticateRequest) error {
-			addToLog(fmt.Sprintf("authenticate called: %s", params.MethodId))
-			return nil
+		authenticateHandler: func(params *AuthenticateRequest) (*AuthenticateResponse, error) {
+			addToLog(fmt.Sprintf("authenticate called: %s", params.MethodID))
+			return &AuthenticateResponse{}, nil
 		},
 		promptHandler: func(params *PromptRequest) (*PromptResponse, error) {
-			addToLog(fmt.Sprintf("prompt called: %s", params.SessionId))
+			addToLog(fmt.Sprintf("prompt called: %s", params.SessionID))
 			return &PromptResponse{StopReason: StopReasonEndTurn}, nil
 		},
 		cancelHandler: func(params *CancelNotification) error {
-			addToLog(fmt.Sprintf("cancelled called: %s", params.SessionId))
+			addToLog(fmt.Sprintf("cancelled called: %s", params.SessionID))
 			return nil
 		},
 	}
@@ -434,16 +447,16 @@ func TestMessageOrdering(t *testing.T) {
 	// Send requests in specific order
 	_, err := agentConnection.NewSession(ctx, &NewSessionRequest{
 		Cwd:        "/test",
-		McpServers: []McpServer{},
+		MCPServers: []MCPServer{},
 	})
 	if err != nil {
 		t.Fatalf("NewSession failed: %v", err)
 	}
 
-	err = clientConnection.Client().WriteTextFile(ctx, &WriteTextFileRequest{
+	_, err = clientConnection.Client().WriteTextFile(ctx, &WriteTextFileRequest{
 		Path:      "/test.txt",
 		Content:   "test",
-		SessionId: SessionId("test-session"),
+		SessionID: SessionID("test-session"),
 	})
 	if err != nil {
 		t.Fatalf("WriteTextFile failed: %v", err)
@@ -451,19 +464,19 @@ func TestMessageOrdering(t *testing.T) {
 
 	_, err = clientConnection.Client().ReadTextFile(ctx, &ReadTextFileRequest{
 		Path:      "/test.txt",
-		SessionId: SessionId("test-session"),
+		SessionID: SessionID("test-session"),
 	})
 	if err != nil {
 		t.Fatalf("ReadTextFile failed: %v", err)
 	}
 
 	_, err = clientConnection.Client().RequestPermission(ctx, &RequestPermissionRequest{
-		SessionId: SessionId("test-session"),
+		SessionID: SessionID("test-session"),
 		ToolCall: ToolCallUpdate{
-			ToolCallId: ToolCallId("tool-123"),
+			ToolCallID: ToolCallID("tool-123"),
 			Title:      "Execute command",
-			Kind:       ToolKindPtr(ToolKindExecute),
-			Status:     ToolCallStatusPtr(ToolCallStatusPending),
+			Kind:       new(ToolKindExecute),
+			Status:     new(ToolCallStatusPending),
 			Locations: []ToolCallLocation{
 				{Path: "/usr/bin/ls"},
 			},
@@ -472,12 +485,12 @@ func TestMessageOrdering(t *testing.T) {
 			{
 				Kind:     PermissionOptionKindAllowOnce,
 				Name:     "Allow",
-				OptionId: PermissionOptionId("allow"),
+				OptionID: PermissionOptionID("allow"),
 			},
 			{
 				Kind:     PermissionOptionKindRejectOnce,
 				Name:     "Reject",
-				OptionId: PermissionOptionId("reject"),
+				OptionID: PermissionOptionID("reject"),
 			},
 		},
 	})
@@ -526,11 +539,9 @@ func TestNotifications(t *testing.T) {
 	// Create client
 	testClient := &TestClient{
 		sessionUpdateHandler: func(notification *SessionNotification) error {
-			if notification.Update.IsAgentmessagechunk() {
-				chunk := notification.Update.GetAgentmessagechunk()
-				if chunk.Content.IsText() {
-					text := chunk.Content.GetText().Text
-					addToLog(fmt.Sprintf("agent message: %s", text))
+			if chunk, ok := notification.Update.AsAgentMessageChunk(); ok {
+				if textBlock, ok := chunk.Content.AsText(); ok {
+					addToLog(fmt.Sprintf("agent message: %s", textBlock.Text))
 				}
 			}
 			return nil
@@ -540,7 +551,7 @@ func TestNotifications(t *testing.T) {
 	// Create agent
 	testAgent := &TestAgent{
 		cancelHandler: func(params *CancelNotification) error {
-			addToLog(fmt.Sprintf("cancelled: %s", params.SessionId))
+			addToLog(fmt.Sprintf("cancelled: %s", params.SessionID))
 			return nil
 		},
 	}
@@ -562,10 +573,9 @@ func TestNotifications(t *testing.T) {
 	// Give connections time to start
 	time.Sleep(100 * time.Millisecond)
 
-	// Send notifications 
-	// SessionUpdate: agent -> client (use clientConnection to simulate agent sending to client)
+	// Send notifications
 	err := clientConnection.Client().SessionUpdate(ctx, &SessionNotification{
-		SessionId: SessionId("test-session"),
+		SessionID: SessionID("test-session"),
 		Update: NewSessionUpdateAgentMessageChunk(
 			NewContentBlockText("Hello from agent"),
 		),
@@ -574,9 +584,9 @@ func TestNotifications(t *testing.T) {
 		t.Fatalf("SessionUpdate failed: %v", err)
 	}
 
-	// Cancel: client -> agent (use agentConnection to send cancel notification)
+	// Cancel: client -> agent
 	err = agentConnection.Cancel(ctx, &CancelNotification{
-		SessionId: SessionId("test-session"),
+		SessionID: SessionID("test-session"),
 	})
 	if err != nil {
 		t.Fatalf("Cancel failed: %v", err)
@@ -619,9 +629,9 @@ func TestInitializeMethod(t *testing.T) {
 				ProtocolVersion: params.ProtocolVersion,
 				AgentCapabilities: &AgentCapabilities{
 					LoadSession: true,
-					McpCapabilities: &McpCapabilities{
-						Http: false,
-						Sse:  true,
+					MCPCapabilities: &MCPCapabilities{
+						HTTP: false,
+						SSE:  true,
 					},
 					PromptCapabilities: &PromptCapabilities{
 						Audio:           false,
@@ -631,7 +641,7 @@ func TestInitializeMethod(t *testing.T) {
 				},
 				AuthMethods: []AuthMethod{
 					{
-						Id:          AuthMethodId("oauth"),
+						ID:          "oauth",
 						Name:        "OAuth",
 						Description: "Authenticate with OAuth",
 					},
@@ -661,7 +671,7 @@ func TestInitializeMethod(t *testing.T) {
 	response, err := agentConnection.Initialize(ctx, &InitializeRequest{
 		ProtocolVersion: ProtocolVersion(CurrentProtocolVersion),
 		ClientCapabilities: &ClientCapabilities{
-			Fs: &FileSystemCapability{
+			FS: &FileSystemCapabilities{
 				ReadTextFile:  false,
 				WriteTextFile: false,
 			},
@@ -687,11 +697,116 @@ func TestInitializeMethod(t *testing.T) {
 		t.Errorf("Expected 1 auth method, got %d", len(response.AuthMethods))
 	} else {
 		authMethod := response.AuthMethods[0]
-		if authMethod.Id != AuthMethodId("oauth") {
-			t.Errorf("Expected auth method ID 'oauth', got '%s'", authMethod.Id)
+		if authMethod.ID != "oauth" {
+			t.Errorf("Expected auth method ID 'oauth', got '%s'", authMethod.ID)
 		}
 		if authMethod.Name != "OAuth" {
 			t.Errorf("Expected auth method name 'OAuth', got '%s'", authMethod.Name)
 		}
 	}
+}
+
+func TestRequestError(t *testing.T) {
+	// Test RequestError type
+	err := ErrMethodNotFound("test/method")
+	if err.Code != ErrorCodeMethodNotFound {
+		t.Errorf("Expected code %d, got %d", ErrorCodeMethodNotFound, err.Code)
+	}
+	if !strings.Contains(err.Error(), "test/method") {
+		t.Errorf("Expected error message to contain 'test/method', got: %s", err.Error())
+	}
+
+	err2 := ErrInvalidParams("bad field", "custom message")
+	if err2.Code != ErrorCodeInvalidParams {
+		t.Errorf("Expected code %d, got %d", ErrorCodeInvalidParams, err2.Code)
+	}
+	if err2.Msg != "custom message" {
+		t.Errorf("Expected message 'custom message', got '%s'", err2.Msg)
+	}
+	if err2.Details != "bad field" {
+		t.Errorf("Expected details 'bad field', got '%v'", err2.Details)
+	}
+}
+
+func TestNewHelperConstructors(t *testing.T) {
+	// Test new content block constructors
+	t.Run("ContentBlockAudio", func(t *testing.T) {
+		block := NewContentBlockAudio("base64data", "audio/mp3")
+		audio, ok := block.AsAudio()
+		if !ok {
+			t.Fatal("Expected audio content block")
+		}
+		if audio.Data != "base64data" {
+			t.Errorf("Expected data 'base64data', got '%s'", audio.Data)
+		}
+		if audio.MimeType != "audio/mp3" {
+			t.Errorf("Expected mimeType 'audio/mp3', got '%s'", audio.MimeType)
+		}
+	})
+
+	// Test new session update constructors
+	t.Run("SessionUpdateUserMessageChunk", func(t *testing.T) {
+		update := NewSessionUpdateUserMessageChunk(NewContentBlockText("user input"))
+		chunk, ok := update.AsUserMessageChunk()
+		if !ok {
+			t.Fatal("Expected user message chunk")
+		}
+		text, ok := chunk.Content.AsText()
+		if !ok {
+			t.Fatal("Expected text content")
+		}
+		if text.Text != "user input" {
+			t.Errorf("Expected 'user input', got '%s'", text.Text)
+		}
+	})
+
+	t.Run("SessionUpdateCurrentModeUpdate", func(t *testing.T) {
+		update := NewSessionUpdateCurrentModeUpdate(SessionModeID("code"))
+		mode, ok := update.AsCurrentModeUpdate()
+		if !ok {
+			t.Fatal("Expected current mode update")
+		}
+		if mode.CurrentModeID != SessionModeID("code") {
+			t.Errorf("Expected mode 'code', got '%s'", mode.CurrentModeID)
+		}
+	})
+
+	// Test MCP server constructors
+	t.Run("MCPServerStdio", func(t *testing.T) {
+		server := NewMCPServerStdio("test-server", "/usr/bin/test", []string{"--arg1"}, []EnvVariable{{Name: "KEY", Value: "val"}})
+		stdio, ok := server.AsStdio()
+		if !ok {
+			t.Fatal("Expected stdio MCP server")
+		}
+		if stdio.Name != "test-server" {
+			t.Errorf("Expected name 'test-server', got '%s'", stdio.Name)
+		}
+		if stdio.Command != "/usr/bin/test" {
+			t.Errorf("Expected command '/usr/bin/test', got '%s'", stdio.Command)
+		}
+	})
+
+	// Test tool call content terminal
+	t.Run("ToolCallContentTerminal", func(t *testing.T) {
+		content := NewToolCallContentTerminal("term-123")
+		terminal, ok := content.AsTerminal()
+		if !ok {
+			t.Fatal("Expected terminal tool call content")
+		}
+		if terminal.TerminalID != "term-123" {
+			t.Errorf("Expected terminal ID 'term-123', got '%s'", terminal.TerminalID)
+		}
+	})
+
+	// Test new(constant) for pointer creation (Go 1.26+)
+	t.Run("NewConstantPointer", func(t *testing.T) {
+		kind := new(ToolKindRead)
+		if *kind != ToolKindRead {
+			t.Errorf("Expected ToolKindRead, got %s", *kind)
+		}
+		status := new(ToolCallStatusPending)
+		if *status != ToolCallStatusPending {
+			t.Errorf("Expected ToolCallStatusPending, got %s", *status)
+		}
+	})
 }

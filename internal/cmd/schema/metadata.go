@@ -28,6 +28,20 @@ func LoadMetadata(filepath string) (*Metadata, error) {
 	return &meta, nil
 }
 
+func (m *Metadata) getAgentMethods() map[string]string {
+	if m == nil {
+		return nil
+	}
+	return m.AgentMethods
+}
+
+func (m *Metadata) getClientMethods() map[string]string {
+	if m == nil {
+		return nil
+	}
+	return m.ClientMethods
+}
+
 // GetInternalTypes returns list of types that should be marked as internal
 func (m *Metadata) GetInternalTypes() []string {
 	return []string{

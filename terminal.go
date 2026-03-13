@@ -2,8 +2,15 @@ package acp
 
 import (
 	"context"
-	"encoding/json"
 )
+
+// terminalClient is the subset of Client needed by TerminalHandle.
+type terminalClient interface {
+	TerminalOutput(ctx context.Context, params *TerminalOutputRequest) (*TerminalOutputResponse, error)
+	WaitForTerminalExit(ctx context.Context, params *WaitForTerminalExitRequest) (*WaitForTerminalExitResponse, error)
+	KillTerminalCommand(ctx context.Context, params *KillTerminalRequest) (*KillTerminalResponse, error)
+	ReleaseTerminal(ctx context.Context, params *ReleaseTerminalRequest) (*ReleaseTerminalResponse, error)
+}
 
 // TerminalHandle represents a handle to a terminal session.
 //
@@ -17,95 +24,54 @@ import (
 // Note: This is an unstable feature and may be removed or changed.
 type TerminalHandle struct {
 	ID        string
-	sessionID SessionId
-	conn      *Connection
+	sessionID SessionID
+	client    terminalClient
 }
 
 // NewTerminalHandle creates a new terminal handle.
-func NewTerminalHandle(id string, sessionID SessionId, conn *Connection) *TerminalHandle {
+func NewTerminalHandle(id string, sessionID SessionID, client terminalClient) *TerminalHandle {
 	return &TerminalHandle{
 		ID:        id,
 		sessionID: sessionID,
-		conn:      conn,
+		client:    client,
 	}
 }
 
 // CurrentOutput gets the current terminal output without waiting for the command to exit.
-// This matches the TypeScript TerminalHandle.currentOutput() method.
 func (t *TerminalHandle) CurrentOutput(ctx context.Context) (*TerminalOutputResponse, error) {
-	params := &TerminalOutputRequest{
-		SessionId:  t.sessionID,
-		TerminalId: t.ID,
-	}
-	
-	data, err := t.conn.SendRequest(ctx, ClientMethods.TerminalOutput, params)
-	if err != nil {
-		return nil, err
-	}
-	
-	var response TerminalOutputResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+	return t.client.TerminalOutput(ctx, &TerminalOutputRequest{
+		SessionID:  t.sessionID,
+		TerminalID: t.ID,
+	})
 }
 
 // WaitForExit waits for the terminal command to complete and returns its exit status.
-// This matches the TypeScript TerminalHandle.waitForExit() method.
 func (t *TerminalHandle) WaitForExit(ctx context.Context) (*WaitForTerminalExitResponse, error) {
-	params := &WaitForTerminalExitRequest{
-		SessionId:  t.sessionID,
-		TerminalId: t.ID,
-	}
-	
-	data, err := t.conn.SendRequest(ctx, ClientMethods.TerminalWaitForExit, params)
-	if err != nil {
-		return nil, err
-	}
-	
-	var response WaitForTerminalExitResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+	return t.client.WaitForTerminalExit(ctx, &WaitForTerminalExitRequest{
+		SessionID:  t.sessionID,
+		TerminalID: t.ID,
+	})
 }
 
 // Kill kills the terminal command without releasing the terminal.
-//
-// The terminal remains valid after killing, allowing you to:
-// - Get the final output with CurrentOutput()
-// - Check the exit status
-// - Release the terminal when done
-//
-// Useful for implementing timeouts or cancellation.
-// This matches the TypeScript TerminalHandle.kill() method.
 func (t *TerminalHandle) Kill(ctx context.Context) error {
-	params := &KillTerminalCommandRequest{
-		SessionId:  t.sessionID,
-		TerminalId: t.ID,
-	}
-	
-	_, err := t.conn.SendRequest(ctx, ClientMethods.TerminalKill, params)
+	_, err := t.client.KillTerminalCommand(ctx, &KillTerminalRequest{
+		SessionID:  t.sessionID,
+		TerminalID: t.ID,
+	})
 	return err
 }
 
 // Release releases the terminal and frees all associated resources.
 //
 // If the command is still running, it will be killed.
-// After release, the terminal ID becomes invalid and cannot be used
-// with other terminal methods.
-//
-// Tool calls that already reference this terminal will continue to
-// display its output.
+// After release, the terminal ID becomes invalid.
 //
 // **Important:** Always call this method when done with the terminal.
-// This matches the TypeScript TerminalHandle.release() method.
 func (t *TerminalHandle) Release(ctx context.Context) error {
-	params := &ReleaseTerminalRequest{
-		SessionId:  t.sessionID,
-		TerminalId: t.ID,
-	}
-	
-	_, err := t.conn.SendRequest(ctx, ClientMethods.TerminalRelease, params)
+	_, err := t.client.ReleaseTerminal(ctx, &ReleaseTerminalRequest{
+		SessionID:  t.sessionID,
+		TerminalID: t.ID,
+	})
 	return err
 }

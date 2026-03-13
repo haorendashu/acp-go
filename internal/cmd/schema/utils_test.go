@@ -77,12 +77,12 @@ func TestToTitleCase(t *testing.T) {
 		{
 			name:  "camelCase sessionId",
 			input: "sessionId",
-			want:  "SessionId",
+			want:  "SessionID",
 		},
 		{
 			name:  "camelCase toolCallId",
 			input: "toolCallId",
-			want:  "ToolCallId",
+			want:  "ToolCallID",
 		},
 		{
 			name:  "long camelCase",

@@ -1,188 +1,247 @@
 package acp
 
-import "encoding/json"
+// Helper functions for constructing discriminated unions.
+//
+// These functions make it easier to create the various union types
+// without needing to understand the internal variant structure.
 
-// Helper functions for constructing discriminated unions
-// These functions are provided to make it easier to create the various types
-// without having to understand the internal structure of discriminated unions.
+// --- SessionUpdate constructors ---
 
-// SessionUpdate constructors
-
-// NewSessionUpdateAgentMessageChunk creates a SessionUpdate with agent message chunk
+// NewSessionUpdateAgentMessageChunk creates a SessionUpdate with an agent message chunk.
 func NewSessionUpdateAgentMessageChunk(content ContentBlock) SessionUpdate {
-	return SessionUpdate{
-		discriminator: "agent_message_chunk",
-		agentmessagechunk: &SessionUpdateAgentmessagechunk{
-			Content:       content,
-			SessionUpdate: "agent_message_chunk",
+	return SessionUpdate{variant: SessionUpdateAgentMessageChunk{
+		ContentChunk: ContentChunk{
+			Content: content,
 		},
-	}
+		SessionUpdate: "agent_message_chunk",
+	}}
 }
 
-// NewSessionUpdateToolCall creates a SessionUpdate with tool call
-func NewSessionUpdateToolCall(toolCallId ToolCallId, title string, kind *ToolKind, status *ToolCallStatus, locations []ToolCallLocation, rawInput interface{}) SessionUpdate {
-	var rawInputJSON json.RawMessage
-	if rawInput != nil {
-		if bytes, err := json.Marshal(rawInput); err == nil {
-			rawInputJSON = bytes
-		}
-	}
-	
-	return SessionUpdate{
-		discriminator: "tool_call",
-		toolcall: &SessionUpdateToolcall{
-			ToolCallId:    toolCallId,
-			Title:         title,
-			Kind:          kind,
-			Status:        status,
-			Locations:     locations,
-			RawInput:      rawInputJSON,
-			SessionUpdate: "tool_call",
+// NewSessionUpdateUserMessageChunk creates a SessionUpdate with a user message chunk.
+func NewSessionUpdateUserMessageChunk(content ContentBlock) SessionUpdate {
+	return SessionUpdate{variant: SessionUpdateUserMessageChunk{
+		ContentChunk: ContentChunk{
+			Content: content,
 		},
-	}
+		SessionUpdate: "user_message_chunk",
+	}}
 }
 
-// NewSessionUpdateToolCallUpdate creates a SessionUpdate with tool call update
-func NewSessionUpdateToolCallUpdate(toolCallId ToolCallId, status *ToolCallStatus, content []ToolCallContent, rawOutput interface{}) SessionUpdate {
-	var rawOutputJSON json.RawMessage
-	if rawOutput != nil {
-		if bytes, err := json.Marshal(rawOutput); err == nil {
-			rawOutputJSON = bytes
-		}
-	}
-	
-	return SessionUpdate{
-		discriminator: "tool_call_update",
-		toolcallupdate: &SessionUpdateToolcallupdate{
-			ToolCallId:    toolCallId,
-			Status:        status,
-			Content:       content,
-			RawOutput:     rawOutputJSON,
-			SessionUpdate: "tool_call_update",
+// NewSessionUpdateAgentThoughtChunk creates a SessionUpdate with an agent thought chunk.
+func NewSessionUpdateAgentThoughtChunk(content ContentBlock) SessionUpdate {
+	return SessionUpdate{variant: SessionUpdateAgentThoughtChunk{
+		ContentChunk: ContentChunk{
+			Content: content,
 		},
-	}
+		SessionUpdate: "agent_thought_chunk",
+	}}
 }
 
-// NewSessionUpdatePlan creates a SessionUpdate with plan
+// NewSessionUpdateToolCall creates a SessionUpdate with a tool call.
+func NewSessionUpdateToolCall(toolCall ToolCall) SessionUpdate {
+	return SessionUpdate{variant: SessionUpdateToolCall{
+		ToolCall:      toolCall,
+		SessionUpdate: "tool_call",
+	}}
+}
+
+// NewSessionUpdateToolCallUpdate creates a SessionUpdate with a tool call update.
+func NewSessionUpdateToolCallUpdate(update ToolCallUpdate) SessionUpdate {
+	return SessionUpdate{variant: SessionUpdateToolCallUpdate{
+		ToolCallUpdate: update,
+		SessionUpdate:  "tool_call_update",
+	}}
+}
+
+// NewSessionUpdatePlan creates a SessionUpdate with a plan.
 func NewSessionUpdatePlan(entries []PlanEntry) SessionUpdate {
-	return SessionUpdate{
-		discriminator: "plan",
-		plan: &SessionUpdatePlan{
-			Entries:       entries,
-			SessionUpdate: "plan",
+	return SessionUpdate{variant: SessionUpdatePlan{
+		Plan: Plan{
+			Entries: entries,
 		},
-	}
+		SessionUpdate: "plan",
+	}}
 }
 
-// ContentBlock constructors
+// NewSessionUpdateAvailableCommandsUpdate creates a SessionUpdate with available commands.
+func NewSessionUpdateAvailableCommandsUpdate(commands []AvailableCommand) SessionUpdate {
+	return SessionUpdate{variant: SessionUpdateAvailableCommandsUpdate{
+		AvailableCommandsUpdate: AvailableCommandsUpdate{
+			AvailableCommands: commands,
+		},
+		SessionUpdate: "available_commands_update",
+	}}
+}
 
-// NewContentBlockText creates a text content block
+// NewSessionUpdateCurrentModeUpdate creates a SessionUpdate with a mode change.
+func NewSessionUpdateCurrentModeUpdate(modeId SessionModeID) SessionUpdate {
+	return SessionUpdate{variant: SessionUpdateCurrentModeUpdate{
+		CurrentModeUpdate: CurrentModeUpdate{
+			CurrentModeID: modeId,
+		},
+		SessionUpdate: "current_mode_update",
+	}}
+}
+
+// NewSessionUpdateConfigOptionUpdate creates a SessionUpdate with config option changes.
+func NewSessionUpdateConfigOptionUpdate(options []SessionConfigOption) SessionUpdate {
+	return SessionUpdate{variant: SessionUpdateConfigOptionUpdate{
+		ConfigOptionUpdate: ConfigOptionUpdate{
+			ConfigOptions: options,
+		},
+		SessionUpdate: "config_option_update",
+	}}
+}
+
+// NewSessionUpdateSessionInfoUpdate creates a SessionUpdate with session info changes.
+func NewSessionUpdateSessionInfoUpdate(title string, updatedAt string) SessionUpdate {
+	return SessionUpdate{variant: SessionUpdateSessionInfoUpdate{
+		SessionInfoUpdate: SessionInfoUpdate{
+			Title:     title,
+			UpdatedAt: updatedAt,
+		},
+		SessionUpdate: "session_info_update",
+	}}
+}
+
+// --- ContentBlock constructors ---
+
+// NewContentBlockText creates a text content block.
 func NewContentBlockText(text string) ContentBlock {
-	return ContentBlock{
-		discriminator: "text",
-		text: &ContentBlockText{
-			Type: "text",
+	return ContentBlock{variant: ContentBlockText{
+		TextContent: TextContent{
 			Text: text,
 		},
-	}
+		Type: "text",
+	}}
 }
 
-// NewContentBlockImage creates an image content block
+// NewContentBlockImage creates an image content block.
 func NewContentBlockImage(data, mimeType string, uri string) ContentBlock {
-	return ContentBlock{
-		discriminator: "image",
-		image: &ContentBlockImage{
-			Type:     "image",
+	return ContentBlock{variant: ContentBlockImage{
+		ImageContent: ImageContent{
 			Data:     data,
 			MimeType: mimeType,
-			Uri:      uri,
+			URI:      uri,
 		},
-	}
+		Type: "image",
+	}}
 }
 
-// NewContentBlockResourceLink creates a resource link content block
+// NewContentBlockAudio creates an audio content block.
+func NewContentBlockAudio(data, mimeType string) ContentBlock {
+	return ContentBlock{variant: ContentBlockAudio{
+		AudioContent: AudioContent{
+			Data:     data,
+			MimeType: mimeType,
+		},
+		Type: "audio",
+	}}
+}
+
+// NewContentBlockResourceLink creates a resource link content block.
 func NewContentBlockResourceLink(name, uri string, title, description, mimeType string, size *int64) ContentBlock {
-	return ContentBlock{
-		discriminator: "resource_link",
-		resourcelink: &ContentBlockResourcelink{
-			Type:        "resource_link",
+	return ContentBlock{variant: ContentBlockResourceLink{
+		ResourceLink: ResourceLink{
 			Name:        name,
-			Uri:         uri,
+			URI:         uri,
 			Title:       title,
 			Description: description,
 			Size:        size,
 			MimeType:    mimeType,
 		},
-	}
+		Type: "resource_link",
+	}}
 }
 
-// RequestPermissionOutcome constructors
+// NewContentBlockResource creates an embedded resource content block.
+func NewContentBlockResource(resource EmbeddedResource) ContentBlock {
+	return ContentBlock{variant: ContentBlockResource{
+		EmbeddedResource: resource,
+		Type:             "resource",
+	}}
+}
 
-// NewRequestPermissionOutcomeSelected creates a selected permission outcome
-func NewRequestPermissionOutcomeSelected(optionId PermissionOptionId) RequestPermissionOutcome {
-	return RequestPermissionOutcome{
-		discriminator: "selected",
-		selected: &RequestPermissionOutcomeSelected{
-			Outcome:  "selected",
-			OptionId: optionId,
+// --- RequestPermissionOutcome constructors ---
+
+// NewRequestPermissionOutcomeSelected creates a selected permission outcome.
+func NewRequestPermissionOutcomeSelected(optionId PermissionOptionID) RequestPermissionOutcome {
+	return RequestPermissionOutcome{variant: RequestPermissionOutcomeSelected{
+		SelectedPermissionOutcome: SelectedPermissionOutcome{
+			OptionID: optionId,
 		},
-	}
+		Outcome: "selected",
+	}}
 }
 
-// NewRequestPermissionOutcomeCancelled creates a cancelled permission outcome
+// NewRequestPermissionOutcomeCancelled creates a cancelled permission outcome.
 func NewRequestPermissionOutcomeCancelled() RequestPermissionOutcome {
-	return RequestPermissionOutcome{
-		discriminator: "cancelled",
-		cancelled: &RequestPermissionOutcomeCancelled{
-			Outcome: "cancelled",
-		},
-	}
+	return RequestPermissionOutcome{variant: RequestPermissionOutcomeCancelled{
+		Outcome: "cancelled",
+	}}
 }
 
-// ToolCallContent constructors
+// --- ToolCallContent constructors ---
 
-// NewToolCallContentContent creates tool call content with a content block
-func NewToolCallContentContent(content ContentBlock) ToolCallContent {
-	return ToolCallContent{
-		discriminator: "content",
-		content: &ToolCallContentContent{
-			Type:    "content",
-			Content: content,
+// NewToolCallContentContent creates tool call content with a content block.
+func NewToolCallContentContent(contentBlock ContentBlock) ToolCallContent {
+	return ToolCallContent{variant: ToolCallContentContent{
+		Content: Content{
+			Content: contentBlock,
 		},
-	}
+		Type: "content",
+	}}
 }
 
-// NewToolCallContentDiff creates tool call content with a diff
+// NewToolCallContentDiff creates tool call content with a diff.
 func NewToolCallContentDiff(path, newText, oldText string) ToolCallContent {
-	return ToolCallContent{
-		discriminator: "diff",
-		diff: &ToolCallContentDiff{
-			Type:    "diff",
+	return ToolCallContent{variant: ToolCallContentDiff{
+		Diff: Diff{
 			Path:    path,
 			NewText: newText,
 			OldText: oldText,
 		},
-	}
+		Type: "diff",
+	}}
 }
 
-// Helper functions for pointers
-
-// StringPtr returns a pointer to a string
-func StringPtr(s string) *string {
-	return &s
+// NewToolCallContentTerminal creates tool call content with a terminal reference.
+func NewToolCallContentTerminal(terminalId string) ToolCallContent {
+	return ToolCallContent{variant: ToolCallContentTerminal{
+		Terminal: Terminal{
+			TerminalID: terminalId,
+		},
+		Type: "terminal",
+	}}
 }
 
-// Int64Ptr returns a pointer to an int64
-func Int64Ptr(i int64) *int64 {
-	return &i
+// --- MCPServer constructors ---
+
+// NewMCPServerStdio creates an MCP server with stdio transport.
+func NewMCPServerStdio(name, command string, args []string, env []EnvVariable) MCPServer {
+	return MCPServer{variant: MCPServerStdio{
+		Name:    name,
+		Command: command,
+		Args:    args,
+		Env:     env,
+	}}
 }
 
-// ToolKindPtr returns a pointer to a ToolKind
-func ToolKindPtr(k ToolKind) *ToolKind {
-	return &k
+// NewMCPServerHTTP creates an MCP server with HTTP transport.
+func NewMCPServerHTTP(name, url string, headers []HTTPHeader) MCPServer {
+	return MCPServer{variant: MCPServerHTTP{
+		Name:    name,
+		URL:     url,
+		Headers: headers,
+	}}
 }
 
-// ToolCallStatusPtr returns a pointer to a ToolCallStatus
-func ToolCallStatusPtr(s ToolCallStatus) *ToolCallStatus {
-	return &s
+// NewMCPServerSSE creates an MCP server with SSE transport.
+func NewMCPServerSSE(name, url string, headers []HTTPHeader) MCPServer {
+	return MCPServer{variant: MCPServerSSE{
+		Name:    name,
+		URL:     url,
+		Headers: headers,
+	}}
 }
+

@@ -9,14 +9,13 @@ import (
 
 func TestGenerator_GenerateWithIgnoreErrors(t *testing.T) {
 	testDir := "testdata_ignore"
-	// Schema with problematic definition that will cause error
-	problemSchemaFile := filepath.Join(testDir, "problem.json")
-	
+	schemaFile := filepath.Join(testDir, "problem.json")
+
 	defer os.RemoveAll(testDir)
-	
-	// Setup test schema with empty struct (will cause "no properties found" error)
+
+	// Schema with valid types including an empty struct (which is now handled correctly)
 	os.MkdirAll(testDir, 0755)
-	os.WriteFile(problemSchemaFile, []byte(`{
+	os.WriteFile(schemaFile, []byte(`{
 		"$defs": {
 			"ValidType": {
 				"type": "string",
@@ -33,59 +32,94 @@ func TestGenerator_GenerateWithIgnoreErrors(t *testing.T) {
 		}
 	}`), 0644)
 
-	tests := []struct {
-		name         string
-		ignoreErrors bool
-		wantErr      bool
-		errorMsg     string
-	}{
-		{
-			name:         "without ignore errors - should fail",
-			ignoreErrors: false,
-			wantErr:      true,
-			errorMsg:     "no properties found",
-		},
-		{
-			name:         "with ignore errors - should succeed",
-			ignoreErrors: true,
-			wantErr:      false,
-		},
+	// With the new generator, empty structs are handled correctly
+	config := &Config{
+		InputFile:    schemaFile,
+		OutputFile:   "output.go",
+		PackageName:  "test",
+		IgnoreErrors: false,
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config := &Config{
-				InputFile:    problemSchemaFile,
-				OutputFile:   "output.go",
-				PackageName:  "test",
-				IgnoreErrors: tt.ignoreErrors,
+	generator := NewGenerator(config)
+
+	err := generator.LoadSchema()
+	if err != nil {
+		t.Fatalf("Failed to load schema: %v", err)
+	}
+
+	err = generator.Generate()
+	if err != nil {
+		t.Errorf("Generator.Generate() should succeed with empty structs: %v", err)
+	}
+}
+
+func TestGenerator_GenerateWithIgnoreTypes(t *testing.T) {
+	testDir := "testdata_ignore_types"
+	schemaFile := filepath.Join(testDir, "test.json")
+	outputFile := filepath.Join(testDir, "output.go")
+
+	defer os.RemoveAll(testDir)
+
+	os.MkdirAll(testDir, 0755)
+	os.WriteFile(schemaFile, []byte(`{
+		"$defs": {
+			"IncludedType": {
+				"type": "string",
+				"description": "This type should be included"
+			},
+			"ExcludedType": {
+				"type": "string",
+				"description": "This type should be excluded"
 			}
-			
-			generator := NewGenerator(config)
-			
-			// Load schema
-			err := generator.LoadSchema()
-			if err != nil {
-				t.Fatalf("Failed to load schema: %v", err)
-			}
-			
-			// Test generation
-			err = generator.Generate()
-			
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("Generator.Generate() error = nil, wantErr %v", tt.wantErr)
-					return
-				}
-				if tt.errorMsg != "" && !strings.Contains(err.Error(), tt.errorMsg) {
-					t.Errorf("Generator.Generate() error = %v, want error containing %v", err, tt.errorMsg)
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Generator.Generate() error = %v, wantErr %v", err, tt.wantErr)
-				}
-			}
-		})
+		}
+	}`), 0644)
+
+	config := &Config{
+		InputFile:   schemaFile,
+		OutputFile:  outputFile,
+		PackageName: "test",
+		IgnoreTypes: []string{"ExcludedType"},
+	}
+
+	err := config.Validate()
+	if err != nil {
+		t.Fatalf("Failed to validate config: %v", err)
+	}
+
+	generator := NewGenerator(config)
+
+	err = generator.LoadSchema()
+	if err != nil {
+		t.Fatalf("Failed to load schema: %v", err)
+	}
+
+	err = generator.Generate()
+	if err != nil {
+		t.Fatalf("Failed to generate: %v", err)
+	}
+
+	err = generator.SaveToFile()
+	if err != nil {
+		t.Fatalf("Failed to save: %v", err)
+	}
+
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	contentStr := string(content)
+
+	if !strings.Contains(contentStr, "IncludedType") {
+		t.Error("Output should contain IncludedType")
+	}
+
+	if strings.Contains(contentStr, "ExcludedType") {
+		t.Error("Output should not contain ExcludedType")
+	}
+
+	if generator.GetSkippedCount() != 1 {
+		t.Errorf("Expected 1 skipped item, got %d", generator.GetSkippedCount())
 	}
 }
 
@@ -93,10 +127,9 @@ func TestGenerator_IgnoreErrorsOutput(t *testing.T) {
 	testDir := "testdata_ignore2"
 	schemaFile := filepath.Join(testDir, "mixed.json")
 	outputFile := filepath.Join(testDir, "output.go")
-	
+
 	defer os.RemoveAll(testDir)
-	
-	// Schema with mix of valid and invalid definitions
+
 	os.MkdirAll(testDir, 0755)
 	os.WriteFile(schemaFile, []byte(`{
 		"$defs": {
@@ -108,7 +141,7 @@ func TestGenerator_IgnoreErrorsOutput(t *testing.T) {
 			},
 			"EmptyStruct": {
 				"type": "object",
-				"description": "Will cause error - no properties"
+				"description": "Empty struct - handled correctly now"
 			},
 			"ValidType": {
 				"type": "string",
@@ -123,53 +156,49 @@ func TestGenerator_IgnoreErrorsOutput(t *testing.T) {
 		PackageName:  "test",
 		IgnoreErrors: true,
 	}
-	
-	// Validate config to create output directory
+
 	err := config.Validate()
 	if err != nil {
 		t.Fatalf("Failed to validate config: %v", err)
 	}
-	
+
 	generator := NewGenerator(config)
-	
-	// Load, generate and save with ignore errors
+
 	err = generator.LoadSchema()
 	if err != nil {
 		t.Fatalf("Failed to load schema: %v", err)
 	}
-	
+
 	err = generator.Generate()
 	if err != nil {
 		t.Errorf("Generator.Generate() with ignore errors should not fail: %v", err)
 		return
 	}
-	
+
 	err = generator.SaveToFile()
 	if err != nil {
 		t.Errorf("Generator.SaveToFile() error = %v", err)
 		return
 	}
-	
-	// Verify output contains valid types but not the problematic one
+
 	content, err := os.ReadFile(outputFile)
 	if err != nil {
 		t.Errorf("Failed to read output file: %v", err)
 		return
 	}
-	
+
 	contentStr := string(content)
-	
-	// Should contain valid types
+
 	if !strings.Contains(contentStr, "ValidEnum") {
 		t.Error("Output should contain ValidEnum type")
 	}
-	
+
 	if !strings.Contains(contentStr, "ValidType") {
 		t.Error("Output should contain ValidType")
 	}
-	
-	// Should NOT contain the problematic struct (since it was skipped)
-	if strings.Contains(contentStr, "EmptyStruct") {
-		t.Error("Output should not contain EmptyStruct (should have been skipped)")
+
+	// EmptyStruct is now generated correctly as empty struct
+	if !strings.Contains(contentStr, "EmptyStruct") {
+		t.Error("Output should contain EmptyStruct (empty structs are now handled)")
 	}
 }

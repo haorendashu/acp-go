@@ -1,122 +1,130 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"slices"
 	"sort"
 	"strings"
 
-	"github.com/ironpark/go-acp/internal/cmd/schema/codegen"
-	"github.com/ironpark/go-acp/internal/cmd/schema/godef"
-	"github.com/kaptinlin/jsonschema"
+	"github.com/ironpark/go-acp/internal/cmd/schema/astgen"
+	"github.com/ironpark/go-acp/internal/cmd/schema/jsondef"
 )
 
 const (
 	DefaultFilePermissions = 0644
 	EmptyEnumName          = "Empty"
-	DiscriminatorFieldName = "discriminator"
-	JSONTag                = "json"
-	OmitEmptyTag           = ",omitempty"
 	JSONRawMessageType     = "json.RawMessage"
 )
 
+// OneOfVariant represents a discriminated union variant.
 type OneOfVariant struct {
-	FieldName string
-	TypeName  string
-	TypeValue string
+	FieldName string // field name for accessor (e.g., "text", "Stdio")
+	TypeName  string // PascalCase type name
+	DiscValue string // discriminator value (empty for default variant)
+	DirectRef bool   // true if using ref type directly (no wrapper struct)
 }
 
-// Generator handles schema to Go code generation
+// Generator handles schema to Go code generation.
 type Generator struct {
-	config        *Config
-	schema        *jsonschema.Schema
-	metadata      *Metadata
-	builder       *codegen.Builder
-	generatedCode []byte
-	skippedCount  int
-	skippedItems  []string
+	config           *Config
+	schema           *jsondef.Schema
+	metadata         *Metadata
+	builder          *astgen.FileBuilder
+	generatedCode    []byte
+	skippedItems     []string
+	excludedDefNames map[string]bool // definitions to exclude (from base schema)
 }
 
-// NewGenerator creates a new generator instance
+// NewGenerator creates a new generator instance.
 func NewGenerator(config *Config) *Generator {
+	builder := astgen.NewFileBuilder(config.PackageName)
+	builder.SetGeneratedBy("schema-gen")
 	return &Generator{
 		config:  config,
-		builder: codegen.NewBuilder(config.PackageName),
+		builder: builder,
 	}
 }
 
-// LoadSchema loads JSON schema from input file
+// LoadSchema loads JSON schema from input file.
 func (g *Generator) LoadSchema() error {
-	data, err := os.ReadFile(g.config.InputFile)
+	schema, err := jsondef.LoadSchema(g.config.InputFile)
 	if err != nil {
-		return fmt.Errorf("failed to read schema file %s: %w", g.config.InputFile, err)
+		return err
 	}
-
-	compiler := jsonschema.NewCompiler()
-	schema, err := compiler.Compile(data)
-	if err != nil {
-		return fmt.Errorf("failed to compile schema file %s: %w", g.config.InputFile, err)
-	}
-
 	g.schema = schema
+
+	// Build exclude set from base schema if configured
+	if g.config.ExcludeFrom != "" {
+		if err := g.loadExcludedDefs(); err != nil {
+			return fmt.Errorf("failed to load base schema for exclusion: %w", err)
+		}
+	}
 	return nil
 }
 
-// LoadMetadata loads metadata from meta.json file if provided
-func (g *Generator) LoadMetadata() error {
-	if g.config.MetaFile == "" {
-		return nil // No metadata file provided
+// loadExcludedDefs loads the base schema and collects all definition names
+// that exist in it, so the current target only generates truly new types.
+func (g *Generator) loadExcludedDefs() error {
+	baseSchema, err := jsondef.LoadSchema(g.config.ExcludeFrom)
+	if err != nil {
+		return err
 	}
 
+	g.excludedDefNames = make(map[string]bool, len(baseSchema.Defs))
+	for name := range baseSchema.Defs {
+		g.excludedDefNames[name] = true
+	}
+	return nil
+}
+
+// LoadMetadata loads metadata from meta.json file if provided.
+func (g *Generator) LoadMetadata() error {
+	if g.config.MetaFile == "" {
+		return nil
+	}
 	meta, err := LoadMetadata(g.config.MetaFile)
 	if err != nil {
 		return fmt.Errorf("failed to load metadata: %w", err)
 	}
-
 	g.metadata = meta
 	return nil
 }
 
-// Generate generates Go code from the loaded schema
+// Generate generates Go code from the loaded schema.
 func (g *Generator) Generate() error {
 	if g.schema == nil {
 		return fmt.Errorf("schema not loaded, call LoadSchema() first")
 	}
 
-	definitions := godef.GetDefinitions(g.schema)
-	var skippedDefinitions []string
+	definitions := jsondef.GetDefinitions(g.schema)
 
 	for _, definition := range definitions {
-		// Skip ignored types
 		if g.isTypeIgnored(definition.Name) {
 			g.addSkippedItem(definition.Name)
-			skippedDefinitions = append(skippedDefinitions, definition.Name)
 			continue
 		}
-		
+
+		// Apply Go naming conventions to definition names
+		definition.Name = toTitleCase(definition.Name)
+
 		if err := g.generateDefinition(definition); err != nil {
 			if g.config.IgnoreErrors {
 				fmt.Printf("Warning: Skipping definition %s due to error: %v\n", definition.Name, err)
 				g.addSkippedItem(definition.Name)
-				skippedDefinitions = append(skippedDefinitions, definition.Name)
 				continue
 			}
 			return fmt.Errorf("failed to generate definition %s: %w", definition.Name, err)
 		}
-		
-		// Mark internal types with appropriate comments
-		if g.metadata != nil {
-			g.markInternalType(definition.Name)
-		}
 	}
 
-	if len(skippedDefinitions) > 0 {
+	if len(g.skippedItems) > 0 {
 		fmt.Printf("Successfully generated types, skipped %d definitions: %v\n",
-			len(skippedDefinitions), skippedDefinitions)
+			len(g.skippedItems), g.skippedItems)
 	}
 
-	// Generate constants from metadata if available (after all type definitions)
+	// Generate constants from metadata
 	if g.metadata != nil {
 		g.generateConstants()
 	}
@@ -124,14 +132,13 @@ func (g *Generator) Generate() error {
 	return nil
 }
 
-// SaveToFile saves the generated code to output file or stdout
+// SaveToFile saves the generated code to output file.
 func (g *Generator) SaveToFile() error {
 	data, err := g.builder.Build()
 	if err != nil {
 		return fmt.Errorf("failed to build code: %w", err)
 	}
 
-	// If no output file specified, write to stdout
 	if g.config.OutputFile == "" {
 		_, err := os.Stdout.Write(data)
 		return err
@@ -140,729 +147,310 @@ func (g *Generator) SaveToFile() error {
 	if err := os.WriteFile(g.config.OutputFile, data, DefaultFilePermissions); err != nil {
 		return fmt.Errorf("failed to write output file: %w", err)
 	}
-
 	return nil
 }
 
-// generateDefinition generates code for a single definition
-func (g *Generator) generateDefinition(definition godef.Definition) error {
-	switch definition.Type {
-	case godef.Primitive:
-		return g.generatePrimitive(definition)
-	case godef.Enum:
-		return g.generateEnum(definition.Name, definition.Schema)
-	case godef.Struct:
-		desc := strings.Split(definition.GetDefinition(), "\n")
-		return g.generateStruct(definition.Name, definition.Schema, desc...)
-	case godef.ComplexStruct:
-		return g.generateComplexStruct(definition.Name, definition.Schema)
-	case godef.Ref:
-		return g.generateTypeAlias(definition)
-	case godef.Union:
-		return g.generateUnion(definition)
-	default:
-		return fmt.Errorf("unsupported definition type: %s", definition.Type)
+// GetGeneratedContent returns the generated code as bytes.
+func (g *Generator) GetGeneratedContent() []byte {
+	if g.generatedCode != nil {
+		return g.generatedCode
 	}
-}
-
-// generatePrimitive generates a primitive type alias
-func (g *Generator) generatePrimitive(def godef.Definition) error {
-	typeDecl := g.builder.CreateType(def.Name, def.GetFieldType())
-
-	// Add comment if available
-	if comment := def.GetDefinition(); comment != "" {
-		typeDecl.Comment = &codegen.Comment{Text: comment}
-	}
-
-	return nil
-}
-
-// generateEnum generates an enum type with constants
-func (g *Generator) generateEnum(name string, def *jsonschema.Schema) error {
-	enumValues, err := g.extractEnumValues(def)
+	data, err := g.builder.Build()
 	if err != nil {
-		return fmt.Errorf("failed to extract enum values: %w", err)
+		return nil
 	}
+	g.generatedCode = data
+	return data
+}
 
+// GetSkippedCount returns the number of skipped definitions.
+func (g *Generator) GetSkippedCount() int {
+	return len(g.skippedItems)
+}
+
+// GetSkippedItems returns the list of skipped definition names.
+func (g *Generator) GetSkippedItems() []string {
+	return g.skippedItems
+}
+
+// generateDefinition generates code for a single definition.
+func (g *Generator) generateDefinition(def jsondef.Definition) error {
+	switch def.Type {
+	case jsondef.Primitive:
+		return g.generatePrimitive(def)
+	case jsondef.Enum:
+		return g.generateEnum(def.Name, def.Schema)
+	case jsondef.Struct:
+		desc := def.GetDescription()
+		return g.generateStruct(def.Name, def.Schema, desc)
+	case jsondef.ComplexStruct:
+		return g.generateComplexStruct(def.Name, def.Schema)
+	case jsondef.Ref:
+		return g.generateTypeAlias(def)
+	case jsondef.Union:
+		return g.generateUnion(def)
+	default:
+		return fmt.Errorf("unsupported definition type: %s", def.Type)
+	}
+}
+
+// generatePrimitive generates a primitive type definition.
+func (g *Generator) generatePrimitive(def jsondef.Definition) error {
+	comment := def.GetDescription()
+	decl := astgen.TypeDef(def.Name, def.GetFieldType(), comment)
+	g.builder.AddDecl(decl)
+	return nil
+}
+
+// generateEnum generates an enum type with constants.
+func (g *Generator) generateEnum(name string, schema *jsondef.Schema) error {
+	enumValues := g.extractEnumValues(schema)
 	if len(enumValues) == 0 {
 		return fmt.Errorf("no enum values found for %s", name)
 	}
 
-	// Create type using CreateType
-	typeDecl := g.builder.CreateType(name, "string")
-
-	// Add type comment if available
-	if def.Description != nil && *def.Description != "" {
-		typeDecl.Comment = &codegen.Comment{Text: *def.Description}
+	// Detect base type: if any value is not quoted, it's an integer enum
+	baseType := "string"
+	for _, ev := range enumValues {
+		if !strings.HasPrefix(ev.Value, `"`) {
+			baseType = "int"
+			break
+		}
 	}
 
-	// Create constants using CreateConstBlock
-	constants := g.builder.CreateConstBlock()
-	for _, enumValue := range enumValues {
-		constName := name + enumValue.Name
-		value := `"` + enumValue.Value + `"`
-		constants.AddConst(constName, name, value, enumValue.Comment)
+	// Create type definition
+	comment := ""
+	if schema.Description != nil {
+		comment = *schema.Description
 	}
+	g.builder.AddDecl(astgen.TypeDef(name, baseType, comment))
+
+	// Create const block
+	consts := make([]astgen.ConstEntry, 0, len(enumValues))
+	for _, ev := range enumValues {
+		consts = append(consts, astgen.ConstEntry{
+			Name:    name + ev.Name,
+			Type:    name,
+			Value:   ev.Value,
+			Comment: ev.Comment,
+		})
+	}
+	g.builder.AddRawDecl(astgen.ConstBlockSource(consts))
 
 	return nil
 }
 
-// EnumValue represents an enum value for generation
-type EnumValue struct {
+type enumValue struct {
 	Name    string
-	Value   string
+	Value   string // pre-formatted: `"str"` for strings, `123` for ints
 	Comment string
 }
 
-// extractEnumValues extracts enum values from schema
-func (g *Generator) extractEnumValues(def *jsonschema.Schema) ([]EnumValue, error) {
-	var enumValues []EnumValue
+func (g *Generator) extractEnumValues(schema *jsondef.Schema) []enumValue {
+	var values []enumValue
 
 	// Handle Enum field
-	for _, enum := range def.Enum {
-		if str, ok := enum.(string); ok {
+	for _, raw := range schema.Enum {
+		var str string
+		if err := rawToString(raw, &str); err == nil {
 			enumName := toTitleCase(str)
 			if enumName == "" {
 				enumName = EmptyEnumName
 			}
-			enumValues = append(enumValues, EnumValue{
-				Name:  enumName,
-				Value: str,
-			})
+			values = append(values, enumValue{Name: enumName, Value: `"` + str + `"`})
 		}
 	}
 
 	// Handle OneOf field
-	for _, enum := range def.OneOf {
-		if enum.Const != nil && enum.Const.Value != nil {
-			if str, ok := enum.Const.Value.(string); ok {
+	for _, oneOf := range schema.OneOf {
+		if oneOf.Const != nil {
+			if str, ok := oneOf.Const.StringValue(); ok {
 				enumName := toTitleCase(str)
 				if enumName == "" {
 					enumName = EmptyEnumName
 				}
 				comment := ""
-				if enum.Description != nil {
-					comment = *enum.Description
+				if oneOf.Description != nil {
+					comment = *oneOf.Description
 				}
-				enumValues = append(enumValues, EnumValue{
-					Name:    enumName,
-					Value:   str,
-					Comment: comment,
-				})
+				values = append(values, enumValue{Name: enumName, Value: `"` + str + `"`, Comment: comment})
 			}
 		}
 	}
 
-	return enumValues, nil
-}
-
-// isFieldOptional determines if a field should have omitempty tag
-// A field is optional if:
-// 1. It's nullable (has null in type or in anyOf/oneOf)
-// 2. It's not in the schema's required array
-func (g *Generator) isFieldOptional(propName string, schema *jsonschema.Schema, def godef.Definition) bool {
-	// Check if field is nullable
-	if def.NullAble {
-		return true
-	}
-
-	// Check if field is not in required array
-	if schema.Required != nil {
-		if slices.Contains(schema.Required, propName) {
-			return false // Field is required, so not optional
+	// Handle AnyOf field (const-based enums, e.g., ErrorCode, SessionConfigOptionCategory)
+	for _, anyOf := range schema.AnyOf {
+		if jsondef.IsNullType(anyOf) {
+			continue
 		}
-		return true // Field is not in required array, so it's optional
+		if anyOf.Const == nil {
+			continue
+		}
+		comment := ""
+		if anyOf.Description != nil {
+			comment = *anyOf.Description
+		}
+		if str, ok := anyOf.Const.StringValue(); ok {
+			enumName := toTitleCase(str)
+			if enumName == "" {
+				enumName = EmptyEnumName
+			}
+			values = append(values, enumValue{Name: enumName, Value: `"` + str + `"`, Comment: comment})
+		} else if num, ok := anyOf.Const.Value.(float64); ok {
+			intVal := int(num)
+			enumName := g.intEnumName(anyOf)
+			values = append(values, enumValue{Name: enumName, Value: fmt.Sprintf("%d", intVal), Comment: comment})
+		}
 	}
 
-	// No required array means all fields are optional
-	return true
+	return values
 }
 
-// generateStruct generates a struct type
-func (g *Generator) generateStruct(name string, schema *jsonschema.Schema, comments ...string) error {
+// intEnumName derives a Go constant name for an integer enum value.
+func (g *Generator) intEnumName(schema *jsondef.Schema) string {
+	if schema.Title != "" {
+		return toTitleCase(schema.Title)
+	}
+	if schema.Description != nil {
+		desc := *schema.Description
+		// Use first line of description if it's short enough
+		if idx := strings.Index(desc, "."); idx > 0 {
+			desc = desc[:idx]
+		}
+		if len(desc) < 40 {
+			return toTitleCase(desc)
+		}
+	}
+	// Fallback: use the number
+	if num, ok := schema.Const.Value.(float64); ok {
+		intVal := int(num)
+		if intVal < 0 {
+			return fmt.Sprintf("Neg%d", -intVal)
+		}
+		return fmt.Sprintf("Code%d", intVal)
+	}
+	return "Unknown"
+}
+
+func rawToString(raw []byte, s *string) error {
+	if len(raw) >= 2 && raw[0] == '"' {
+		return json.Unmarshal(raw, s)
+	}
+	return fmt.Errorf("not a string")
+}
+
+// generateStruct generates a struct type definition.
+func (g *Generator) generateStruct(name string, schema *jsondef.Schema, comment string) error {
 	if schema.Properties == nil {
-		return fmt.Errorf("no properties found for struct %s", name)
-	}
-
-	// Create struct using new API
-	st := g.builder.CreateStruct(name)
-
-	// Add comment if provided
-	if len(comments) > 0 {
-		st.Comment = &codegen.Comment{
-			Text: strings.Join(comments, "\n"),
-		}
-	}
-
-	// Add fields using new API
-	if err := g.addStructFields(st, schema); err != nil {
-		return fmt.Errorf("failed to add struct fields: %w", err)
-	}
-
-	return nil
-}
-
-// addStructFields adds fields to struct using new API
-func (g *Generator) addStructFields(st *codegen.StructDecl, schema *jsonschema.Schema) error {
-	// Sort property names alphabetically for consistent field ordering
-	var propNames []string
-	for propName := range *schema.Properties {
-		propNames = append(propNames, propName)
-	}
-	slices.Sort(propNames)
-
-	for _, propName := range propNames {
-		propSchema := (*schema.Properties)[propName]
-		def := godef.GetDefinition(propName, propSchema)
-
-		if err := g.addStructField(st, propName, propSchema, def, schema); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// addStructField adds a single field to the struct
-func (g *Generator) addStructField(st *codegen.StructDecl, propName string, propSchema *jsonschema.Schema, def godef.Definition, parentSchema *jsonschema.Schema) error {
-	fieldName := toTitleCase(propName)
-	tag := g.createJSONTag(propName, parentSchema, def)
-
-	switch def.Type {
-	case godef.Primitive:
-		return g.addPrimitiveField(st, fieldName, propSchema, tag)
-	case godef.Struct:
-		return g.addStructFieldNested(st, fieldName, propName, propSchema, tag)
-	case godef.Array:
-		return g.addArrayField(st, fieldName, def, tag)
-	case godef.Ref:
-		return g.addRefField(st, fieldName, propName, parentSchema, def, tag)
-	default:
-		return g.addDefaultField(st, fieldName, propSchema, tag, propName, def)
-	}
-}
-
-// createJSONTag creates JSON tag for field
-func (g *Generator) createJSONTag(propName string, schema *jsonschema.Schema, def godef.Definition) string {
-	jsonTag := propName
-	if g.isFieldOptional(propName, schema, def) {
-		jsonTag += OmitEmptyTag
-	}
-	return `json:"` + jsonTag + `"`
-}
-
-// addPrimitiveField adds a primitive type field
-func (g *Generator) addPrimitiveField(st *codegen.StructDecl, fieldName string, propSchema *jsonschema.Schema, tag string) error {
-	fieldType := g.getGoTypeName(propSchema)
-	if _, err := st.CreateField(fieldName, fieldType, tag); err != nil {
-		return fmt.Errorf("failed to create primitive field %s: %w", fieldName, err)
-	}
-	return nil
-}
-
-// addStructFieldNested adds a nested struct field
-func (g *Generator) addStructFieldNested(st *codegen.StructDecl, fieldName, propName string, propSchema *jsonschema.Schema, tag string) error {
-	// Generate nested struct
-	desc := []string{}
-	if propSchema.Description != nil {
-		desc = strings.Split(*propSchema.Description, "\n")
-	}
-	if err := g.generateStruct(propName, propSchema, desc...); err != nil {
-		return fmt.Errorf("failed to generate nested struct %s: %w", propName, err)
-	}
-	fieldType := g.getGoTypeName(propSchema)
-	if _, err := st.CreateField(fieldName, fieldType, tag); err != nil {
-		return fmt.Errorf("failed to create struct field %s: %w", fieldName, err)
-	}
-	return nil
-}
-
-// addArrayField adds an array type field
-func (g *Generator) addArrayField(st *codegen.StructDecl, fieldName string, def godef.Definition, tag string) error {
-	fieldType := def.GetFieldType()
-	if _, err := st.CreateField(fieldName, fieldType, tag); err != nil {
-		return fmt.Errorf("failed to create array field %s: %w", fieldName, err)
-	}
-	return nil
-}
-
-// addRefField adds a reference type field
-func (g *Generator) addRefField(st *codegen.StructDecl, fieldName, propName string, schema *jsonschema.Schema, def godef.Definition, tag string) error {
-	fieldType := def.GetFieldType()
-	// For optional reference fields, make them pointer types
-	if g.isFieldOptional(propName, schema, def) && !strings.HasPrefix(fieldType, "*") {
-		fieldType = "*" + fieldType
-	}
-	if _, err := st.CreateField(fieldName, fieldType, tag); err != nil {
-		return fmt.Errorf("failed to create ref field %s: %w", fieldName, err)
-	}
-	return nil
-}
-
-// addDefaultField adds a field for unsupported or no-type schemas
-func (g *Generator) addDefaultField(st *codegen.StructDecl, fieldName string, propSchema *jsonschema.Schema, tag, propName string, def godef.Definition) error {
-	if g.isNoTypeSchema(propSchema) {
-		if _, err := st.CreateField(fieldName, JSONRawMessageType, tag); err != nil {
-			return fmt.Errorf("failed to create %s field %s: %w", JSONRawMessageType, fieldName, err)
+		if len(schema.AnyOf) > 0 || len(schema.OneOf) > 0 {
+			// Union type that couldn't be fully resolved — use any
+			g.builder.AddDecl(astgen.TypeDef(name, "any", comment))
+		} else {
+			g.builder.AddDecl(astgen.EmptyStructDef(name, comment))
 		}
 		return nil
 	}
-	return fmt.Errorf("unsupported field type %s for property %s", def.Type, propName)
-}
 
-// generateTypeAlias generates a type alias for single reference types
-func (g *Generator) generateTypeAlias(definition godef.Definition) error {
-	targetType := definition.GetFieldType()
-	typeDecl := g.builder.CreateType(definition.Name, targetType)
-
-	// Add comment if available
-	if comment := definition.GetDefinition(); comment != "" {
-		typeDecl.Comment = &codegen.Comment{Text: comment}
+	fields, err := g.buildStructFields(schema)
+	if err != nil {
+		return err
 	}
 
+	g.builder.AddDecl(astgen.StructDef(name, fields, comment))
 	return nil
 }
 
-// generateUnion generates a union type (interface{}) for types without discriminator
-func (g *Generator) generateUnion(definition godef.Definition) error {
-	schema := definition.Schema
-	allVariants := append([]*jsonschema.Schema{}, schema.AnyOf...)
-	allVariants = append(allVariants, schema.OneOf...)
-	
-	return g.generateUnionInterface(definition.Name, schema, allVariants)
+func (g *Generator) buildStructFields(schema *jsondef.Schema) ([]astgen.StructField, error) {
+	// Sort property names for consistent ordering
+	propNames := make([]string, 0, len(schema.Properties))
+	for name := range schema.Properties {
+		propNames = append(propNames, name)
+	}
+	slices.Sort(propNames)
+
+	var fields []astgen.StructField
+	for _, propName := range propNames {
+		// Skip _meta property — handled as a generic map field
+		if propName == "_meta" {
+			fields = append(fields, astgen.StructField{
+				Name: "Meta",
+				Type: astgen.TypeExpr("map[string]any"),
+				Tag:  `json:"_meta,omitempty"`,
+			})
+			continue
+		}
+		propSchema := schema.Properties[propName]
+		def := jsondef.Classify(propName, propSchema)
+
+		field, err := g.buildStructField(propName, propSchema, def, schema)
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, field)
+	}
+
+	return fields, nil
 }
 
-// generateComplexStruct generates a complex struct with AnyOf/OneOf variants
-func (g *Generator) generateComplexStruct(name string, schema *jsonschema.Schema) error {
-	// Detect discriminator field automatically from both AnyOf and OneOf
-	allVariants := append([]*jsonschema.Schema{}, schema.AnyOf...)
-	allVariants = append(allVariants, schema.OneOf...)
-	discriminatorField := g.detectDiscriminatorField(allVariants)
+func (g *Generator) buildStructField(propName string, propSchema *jsondef.Schema, def jsondef.Definition, parentSchema *jsondef.Schema) (astgen.StructField, error) {
+	fieldName := toTitleCase(propName)
+	isOptional := g.isFieldOptional(propName, parentSchema, def)
+	jsonTag := propName
+	if isOptional {
+		jsonTag += ",omitempty"
+	}
+	tag := `json:"` + jsonTag + `"`
 
-	// Create struct using new API
-	st := g.builder.CreateStruct(name)
+	var fieldType string
 
-	// Add comment if provided
-	if schema.Description != nil {
-		st.Comment = &codegen.Comment{
-			Text: *schema.Description,
+	switch def.Type {
+	case jsondef.Primitive:
+		fieldType = jsondef.GetGoTypeName(propSchema)
+	case jsondef.Struct:
+		// Generate nested struct
+		nestedComment := ""
+		if propSchema.Description != nil {
+			nestedComment = *propSchema.Description
+		}
+		if err := g.generateStruct(propName, propSchema, nestedComment); err != nil {
+			return astgen.StructField{}, fmt.Errorf("failed to generate nested struct %s: %w", propName, err)
+		}
+		fieldType = jsondef.GetGoTypeName(propSchema)
+	case jsondef.Array:
+		fieldType = def.GetFieldType()
+	case jsondef.Ref:
+		fieldType = def.GetFieldType()
+		if isOptional && !strings.HasPrefix(fieldType, "*") {
+			fieldType = "*" + fieldType
+		}
+	default:
+		// No type info → json.RawMessage
+		if isNoTypeSchema(propSchema) {
+			fieldType = JSONRawMessageType
+			g.builder.AddImport("encoding/json")
+		} else {
+			return astgen.StructField{}, fmt.Errorf("unsupported field type %s for property %s", def.Type, propName)
 		}
 	}
 
-	// Process variants
-	variants, hasTypeDiscriminator := g.processVariants(name, st, schema.AnyOf, schema.OneOf, discriminatorField)
-
-	// Add discriminator field and JSON methods if needed
-	if hasTypeDiscriminator {
-		g.addDiscriminatorField(st)
-		if len(variants) > 0 {
-			g.addJSONMethodsWithDiscriminator(name, variants, discriminatorField)
-			g.addAccessorMethods(name, variants)
-		}
-	}
-
-	return nil
+	return astgen.StructField{
+		Name: fieldName,
+		Type: astgen.TypeExpr(fieldType),
+		Tag:  tag,
+	}, nil
 }
 
-// isAllRefs checks if all variants in the list are $ref types or null types
-func (g *Generator) isAllRefs(variants []*jsonschema.Schema) bool {
-	if len(variants) == 0 {
-		return false
+func (g *Generator) isFieldOptional(propName string, schema *jsondef.Schema, def jsondef.Definition) bool {
+	if def.Nullable {
+		return true
 	}
-	for _, variant := range variants {
-		// Allow $ref types and null types
-		if variant.Ref == "" && !g.isNullType(variant) {
-			return false
-		}
+	if schema.Required != nil {
+		return !slices.Contains(schema.Required, propName)
 	}
 	return true
 }
 
-// isNullType checks if a schema represents a null type
-func (g *Generator) isNullType(schema *jsonschema.Schema) bool {
-	return len(schema.Type) == 1 && schema.Type[0] == "null"
-}
-
-// generateUnionInterface generates an interface type for union types without discriminator
-func (g *Generator) generateUnionInterface(name string, schema *jsonschema.Schema, variants []*jsonschema.Schema) error {
-	// Extract type names from $ref and null types
-	var typeNames []string
-	hasNull := false
-	
-	for _, variant := range variants {
-		if variant.Ref != "" {
-			typeName := strings.TrimPrefix(variant.Ref, "#/$defs/")
-			typeNames = append(typeNames, typeName)
-		} else if g.isNullType(variant) {
-			hasNull = true
-		}
-	}
-
-	// Create type alias to interface{}
-	typeDecl := g.builder.CreateType(name, "interface{}")
-
-	// Build comment with description and possible types
-	var commentLines []string
-	if schema.Description != nil {
-		commentLines = append(commentLines, strings.Split(*schema.Description, "\n")...)
-		commentLines = append(commentLines, "")
-	}
-	
-	if len(typeNames) > 0 || hasNull {
-		commentLines = append(commentLines, "Possible types:")
-		for _, typeName := range typeNames {
-			commentLines = append(commentLines, "- "+typeName)
-		}
-		if hasNull {
-			commentLines = append(commentLines, "- null")
-		}
-	}
-
-	if len(commentLines) > 0 {
-		typeDecl.Comment = &codegen.Comment{Text: strings.Join(commentLines, "\n")}
-	}
-
-	return nil
-}
-
-// processVariants processes AnyOf and OneOf variants to generate struct fields
-func (g *Generator) processVariants(name string, st *codegen.StructDecl, anyOfSchemas, oneOfSchemas []*jsonschema.Schema, discriminatorField string) ([]OneOfVariant, bool) {
-	var variants []OneOfVariant
-	hasTypeDiscriminator := false
-
-	// Process AnyOf variants
-	for _, schema := range anyOfSchemas {
-		variant, hasDiscriminator := g.processVariant(name, st, schema, discriminatorField, "AnyOf")
-		if hasDiscriminator {
-			variants = append(variants, variant)
-			hasTypeDiscriminator = true
-		}
-	}
-
-	// Process OneOf variants
-	for _, schema := range oneOfSchemas {
-		variant, hasDiscriminator := g.processVariant(name, st, schema, discriminatorField, "OneOf")
-		if hasDiscriminator {
-			variants = append(variants, variant)
-			hasTypeDiscriminator = true
-		}
-	}
-
-	return variants, hasTypeDiscriminator
-}
-
-// processVariant processes a single variant schema
-func (g *Generator) processVariant(name string, st *codegen.StructDecl, schema *jsonschema.Schema, discriminatorField, variantType string) (OneOfVariant, bool) {
-	def := godef.GetDefinition(name, schema)
-	if def.Type != godef.Struct || schema.Properties == nil {
-		return OneOfVariant{}, false
-	}
-
-	props := *schema.Properties
-	if discriminatorField == "" {
-		return OneOfVariant{}, false
-	}
-
-	v, ok := props[discriminatorField]
-	if !ok || v.Const == nil {
-		return OneOfVariant{}, false
-	}
-
-	value := v.Const.Value.(string)
-	variantName := toTitleCase(name) + toTitleCase(strings.ReplaceAll(value, "_", ""))
-
-	desc := []string{variantType + " " + variantName}
-	if schema.Description != nil {
-		desc = strings.Split(*schema.Description, "\n")
-	}
-
-	if err := g.generateStruct(variantName, schema, desc...); err != nil {
-		return OneOfVariant{}, false
-	}
-
-	fieldName := strings.ToLower(strings.ReplaceAll(value, "_", ""))
-	if _, err := st.CreateField(fieldName, "*"+variantName); err != nil {
-		return OneOfVariant{}, false
-	}
-
-	return OneOfVariant{
-		FieldName: fieldName,
-		TypeName:  variantName,
-		TypeValue: value,
-	}, true
-}
-
-// addDiscriminatorField adds the discriminator field to the struct
-func (g *Generator) addDiscriminatorField(st *codegen.StructDecl) {
-	// Insert discriminator field at the beginning
-	if _, err := st.CreateField(DiscriminatorFieldName, "string"); err != nil {
-		return
-	}
-
-	// Move discriminator field to the beginning
-	if len(st.Fields) > 1 {
-		// Move the last added field (discriminator) to the beginning
-		discriminator := st.Fields[len(st.Fields)-1]
-		st.Fields = st.Fields[:len(st.Fields)-1]
-		st.Fields = append([]*codegen.Field{discriminator}, st.Fields...)
-	}
-}
-
-// addJSONMethodsWithDiscriminator generates JSON marshaling methods for OneOf structs with custom discriminator
-func (g *Generator) addJSONMethodsWithDiscriminator(typeName string, variants []OneOfVariant, discriminatorField string) {
-	// Ensure required imports
-	g.builder.AddImport("encoding/json")
-	g.builder.AddImport("fmt")
-
-	// Find the struct declaration
-	structDecl := g.builder.GetStructDeclaration(typeName)
-	if structDecl != nil {
-		// Generate and add MarshalJSON method
-		marshalMethod := g.generateMarshalJSONMethod(typeName, variants)
-		unmarshalMethod := g.generateUnmarshalJSONMethod(typeName, variants, discriminatorField)
-
-		structDecl.AddMethod(marshalMethod)
-		structDecl.AddMethod(unmarshalMethod)
-	}
-}
-
-// addAccessorMethods generates getter and checker methods for oneOf variant fields
-func (g *Generator) addAccessorMethods(typeName string, variants []OneOfVariant) {
-	// Find the struct declaration
-	structDecl := g.builder.GetStructDeclaration(typeName)
-	if structDecl == nil {
-		return
-	}
-
-	receiverVar := strings.ToLower(typeName[:1])
-
-	for _, variant := range variants {
-		// Generate getter method (e.g., GetCancelled() *RequestPermissionOutcomeCancelled)
-		getterName := "Get" + toTitleCase(variant.FieldName)
-		getterBody := fmt.Sprintf("return %s.%s", receiverVar, variant.FieldName)
-
-		getterMethod := &codegen.MethodDecl{
-			Receiver: &codegen.Field{
-				Name: receiverVar,
-				Type: &codegen.PointerType{Elem: &codegen.BasicType{Name: typeName}},
-			},
-			Name: getterName,
-			Results: []*codegen.Field{
-				{Type: &codegen.PointerType{Elem: &codegen.BasicType{Name: variant.TypeName}}},
-			},
-			Body: getterBody,
-		}
-
-		structDecl.AddMethod(getterMethod)
-
-		// Generate checker method (e.g., IsCancelled() bool)
-		checkerName := "Is" + toTitleCase(variant.FieldName)
-		checkerBody := fmt.Sprintf("return %s.%s != nil", receiverVar, variant.FieldName)
-
-		checkerMethod := &codegen.MethodDecl{
-			Receiver: &codegen.Field{
-				Name: receiverVar,
-				Type: &codegen.PointerType{Elem: &codegen.BasicType{Name: typeName}},
-			},
-			Name: checkerName,
-			Results: []*codegen.Field{
-				{Type: &codegen.BasicType{Name: "bool"}},
-			},
-			Body: checkerBody,
-		}
-
-		structDecl.AddMethod(checkerMethod)
-	}
-}
-
-// generateMarshalJSONMethod creates MarshalJSON method implementation
-func (g *Generator) generateMarshalJSONMethod(typeName string, variants []OneOfVariant) *codegen.MethodDecl {
-	receiverVar := strings.ToLower(typeName[:1])
-	body := fmt.Sprintf(`switch %s.discriminator {
-%s	}
-	return nil, fmt.Errorf("no variant is set for %s")`,
-		receiverVar, g.generateMarshalCases(receiverVar, variants), typeName)
-
-	return &codegen.MethodDecl{
-		Receiver: &codegen.Field{
-			Name: receiverVar,
-			Type: &codegen.BasicType{Name: typeName},
-		},
-		Name: "MarshalJSON",
-		Results: []*codegen.Field{
-			{Type: &codegen.SliceType{Elem: &codegen.BasicType{Name: "byte"}}},
-			{Type: &codegen.BasicType{Name: "error"}},
-		},
-		Body: body,
-	}
-}
-
-// generateUnmarshalJSONMethod creates UnmarshalJSON method implementation
-func (g *Generator) generateUnmarshalJSONMethod(typeName string, variants []OneOfVariant, discriminatorField string) *codegen.MethodDecl {
-	receiverVar := strings.ToLower(typeName[:1])
-
-	body := fmt.Sprintf(`var discriminator struct {
-		%s string `+"`json:\"%s\"`"+`
-	}
-	if err := json.Unmarshal(data, &discriminator); err != nil {
-		return err
-	}
-
-	switch discriminator.%s {
-%s	}
-	return fmt.Errorf("unknown discriminator value: %%s", discriminator.%s)`,
-		toTitleCase(discriminatorField), discriminatorField, toTitleCase(discriminatorField),
-		g.generateUnmarshalCases(receiverVar, variants),
-		toTitleCase(discriminatorField))
-
-	return &codegen.MethodDecl{
-		Receiver: &codegen.Field{
-			Name: receiverVar,
-			Type: &codegen.PointerType{Elem: &codegen.BasicType{Name: typeName}},
-		},
-		Name: "UnmarshalJSON",
-		Params: []*codegen.Field{
-			{Name: "data", Type: &codegen.SliceType{Elem: &codegen.BasicType{Name: "byte"}}},
-		},
-		Results: []*codegen.Field{
-			{Type: &codegen.BasicType{Name: "error"}},
-		},
-		Body: body,
-	}
-}
-
-// generateMarshalCases generates switch cases for MarshalJSON
-func (g *Generator) generateMarshalCases(receiverVar string, variants []OneOfVariant) string {
-	var cases []string
-
-	for _, variant := range variants {
-		caseBody := fmt.Sprintf(`case "%s":
-		return json.Marshal(%s.%s)`,
-			variant.TypeValue,
-			receiverVar, variant.FieldName)
-		cases = append(cases, "\t"+caseBody)
-	}
-
-	return strings.Join(cases, "\n")
-}
-
-// generateUnmarshalCases generates switch cases for UnmarshalJSON
-func (g *Generator) generateUnmarshalCases(receiverVar string, variants []OneOfVariant) string {
-	var cases []string
-
-	for _, variant := range variants {
-		caseBody := fmt.Sprintf(`case "%s":
-		var v %s
-		if err := json.Unmarshal(data, &v); err != nil {
-			return err
-		}
-		%s.%s = &v
-		%s.discriminator = "%s"
-		return nil`,
-			variant.TypeValue, variant.TypeName,
-			receiverVar, variant.FieldName,
-			receiverVar, variant.TypeValue)
-		cases = append(cases, "\t"+caseBody)
-	}
-
-	return strings.Join(cases, "\n")
-}
-
-// detectDiscriminatorField analyzes oneOf variants to automatically detect discriminator field
-func (g *Generator) detectDiscriminatorField(oneOfSchemas []*jsonschema.Schema) string {
-	if len(oneOfSchemas) < 2 {
-		return ""
-	}
-
-	// Collect all property names that have const values across all variants
-	candidateFields := make(map[string]map[string]bool) // fieldName -> set of const values
-
-	for _, schema := range oneOfSchemas {
-		if schema.Properties == nil {
-			continue
-		}
-
-		props := *schema.Properties
-		for propName, propSchema := range props {
-			if propSchema.Const != nil {
-				// Only consider string and integer const values
-				switch propSchema.Const.Value.(type) {
-				case string, int, int64, float64:
-					if candidateFields[propName] == nil {
-						candidateFields[propName] = make(map[string]bool)
-					}
-					valueStr := fmt.Sprintf("%v", propSchema.Const.Value)
-					candidateFields[propName][valueStr] = true
-				}
-			}
-		}
-	}
-
-	// Find fields that appear in ALL variants with DIFFERENT values
-	for fieldName, values := range candidateFields {
-		// Count how many variants have this field with const values
-		variantCount := 0
-		for _, schema := range oneOfSchemas {
-			if schema.Properties != nil {
-				props := *schema.Properties
-				if prop, exists := props[fieldName]; exists && prop.Const != nil {
-					variantCount++
-				}
-			}
-		}
-
-		// If this field appears in all variants and has different values, it's a discriminator
-		if variantCount == len(oneOfSchemas) && len(values) == len(oneOfSchemas) {
-			return fieldName
-		}
-	}
-
-	return ""
-}
-
-// getGoTypeName converts JSON schema type to Go type name
-func (g *Generator) getGoTypeName(schema *jsonschema.Schema) string {
-	if len(schema.Type) == 0 {
-		if schema.Ref != "" {
-			return strings.TrimPrefix(schema.Ref, "#/$defs/")
-		}
-		return "any"
-	}
-
-	nullAble := len(schema.Type) == 2 && slices.Contains(schema.Type, "null")
-	typeName := schema.Type[0]
-	if nullAble {
-		for _, t := range schema.Type {
-			if t != "null" {
-				typeName = t
-				break
-			}
-		}
-	}
-
-	switch typeName {
-	case "string":
-		typeName = "string"
-	case "boolean":
-		typeName = "bool"
-	case "number":
-		typeName = "float64"
-	case "integer":
-		typeName = "int64"
-	}
-
-	if nullAble {
-		switch typeName {
-		case "bool", "int64", "float64":
-			typeName = "*" + typeName
-		}
-	}
-
-	return typeName
-}
-
-// isNoTypeSchema checks if schema has no type information
-func (g *Generator) isNoTypeSchema(schema *jsonschema.Schema) bool {
+func isNoTypeSchema(schema *jsondef.Schema) bool {
 	return len(schema.Type) == 0 &&
 		schema.Ref == "" &&
 		schema.Properties == nil &&
@@ -870,152 +458,513 @@ func (g *Generator) isNoTypeSchema(schema *jsonschema.Schema) bool {
 		schema.OneOf == nil
 }
 
-// GetGeneratedContent returns the generated code as bytes
-func (g *Generator) GetGeneratedContent() []byte {
-	if g.generatedCode != nil {
-		return g.generatedCode
-	}
-
-	// Generate content if not cached
-	data, err := g.builder.Build()
-	if err != nil {
-		return nil
-	}
-
-	g.generatedCode = data
-	return data
+// generateTypeAlias generates a type alias for single reference types.
+func (g *Generator) generateTypeAlias(def jsondef.Definition) error {
+	targetType := def.GetFieldType()
+	comment := def.GetDescription()
+	g.builder.AddDecl(astgen.TypeAlias(def.Name, targetType, comment))
+	return nil
 }
 
-// GetSkippedCount returns the number of skipped definitions
-func (g *Generator) GetSkippedCount() int {
-	return g.skippedCount
-}
+// generateUnion generates a union type (any) for types without discriminator.
+func (g *Generator) generateUnion(def jsondef.Definition) error {
+	schema := def.Schema
+	allVariants := make([]*jsondef.Schema, 0, len(schema.AnyOf)+len(schema.OneOf))
+	allVariants = append(allVariants, schema.AnyOf...)
+	allVariants = append(allVariants, schema.OneOf...)
 
-// GetSkippedItems returns the list of skipped definition names
-func (g *Generator) GetSkippedItems() []string {
-	return g.skippedItems
-}
-
-// generateConstants generates constants from metadata
-func (g *Generator) generateConstants() {
-	if g.metadata == nil {
-		return
-	}
-
-	// Generate protocol version constant
-	constants := g.builder.CreateConstBlock()
-	constants.AddConst("CurrentProtocolVersion", "int", fmt.Sprintf("%d", g.metadata.Version), "Current protocol version from metadata")
-
-	// Generate agent methods structured constant
-	if len(g.metadata.AgentMethods) > 0 {
-		g.generateStructuredConstants("AgentMethods", g.metadata.AgentMethods, "Agent method names")
-	}
-
-	// Generate client methods structured constant
-	if len(g.metadata.ClientMethods) > 0 {
-		g.generateStructuredConstants("ClientMethods", g.metadata.ClientMethods, "Client method names")
-	}
-}
-
-// generateStructuredConstants generates a structured constant similar to TypeScript objects
-func (g *Generator) generateStructuredConstants(varName string, methods map[string]string, comment string) {
-	// Sort keys for consistent ordering
-	keys := make([]string, 0, len(methods))
-	for key := range methods {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	
-	// Create a variable with anonymous struct type and literal
-	varDecl := &codegen.VariableDecl{
-		Comment: &codegen.Comment{Text: comment},
-		Name:    varName,
-		Type:    "", // Will be inferred from value
-		Value:   g.buildAnonymousStructLiteral(methods, keys),
-	}
-	
-	g.builder.AddDeclaration(varDecl)
-}
-
-// buildAnonymousStructLiteral builds an anonymous struct literal string
-func (g *Generator) buildAnonymousStructLiteral(methods map[string]string, keys []string) string {
-	var structLiteral strings.Builder
-	structLiteral.WriteString("struct{\n")
-	
-	// Define struct fields
-	for _, key := range keys {
-		fieldName := g.formatFieldName(key)
-		structLiteral.WriteString(fmt.Sprintf("\t%s string\n", fieldName))
-	}
-	
-	structLiteral.WriteString("}{\n")
-	
-	// Initialize struct fields
-	for _, key := range keys {
-		value := methods[key]
-		fieldName := g.formatFieldName(key)
-		structLiteral.WriteString(fmt.Sprintf("\t%s: \"%s\",\n", fieldName, value))
-	}
-	
-	structLiteral.WriteString("}")
-	return structLiteral.String()
-}
-
-// formatFieldName formats field names consistently
-func (g *Generator) formatFieldName(key string) string {
-	// Convert snake_case to PascalCase with proper handling
-	parts := strings.Split(key, "_")
-	var result strings.Builder
-	
-	for _, part := range parts {
-		if part != "" {
-			// Capitalize first letter and keep the rest as is
-			result.WriteString(strings.ToUpper(part[:1]) + strings.ToLower(part[1:]))
+	// Extract type names from $ref
+	var typeNames []string
+	hasNull := false
+	for _, variant := range allVariants {
+		if variant.Ref != "" {
+			typeNames = append(typeNames, jsondef.ResolveRefGo(variant.Ref))
+		} else if jsondef.IsNullType(variant) {
+			hasNull = true
 		}
 	}
-	
-	return result.String()
-}
 
-// markInternalType marks a type as internal if it's in the internal types list
-func (g *Generator) markInternalType(typeName string) {
-	if g.metadata == nil {
-		return
+	// Build comment
+	var commentLines []string
+	if schema.Description != nil {
+		commentLines = append(commentLines, *schema.Description)
+		commentLines = append(commentLines, "")
+	}
+	if len(typeNames) > 0 || hasNull {
+		commentLines = append(commentLines, "Possible types:")
+		for _, tn := range typeNames {
+			commentLines = append(commentLines, "- "+tn)
+		}
+		if hasNull {
+			commentLines = append(commentLines, "- null")
+		}
 	}
 
-	internalTypes := g.metadata.GetInternalTypes()
-	for _, internal := range internalTypes {
-		if typeName == internal {
-			// Find and mark the type declaration as internal
-			if typeDecl := g.builder.GetTypeDeclaration(typeName); typeDecl != nil {
-				if typeDecl.Comment == nil {
-					typeDecl.Comment = &codegen.Comment{}
-				}
-				typeDecl.Comment.Text = "@internal\n" + typeDecl.Comment.Text
-			}
-			if structDecl := g.builder.GetStructDeclaration(typeName); structDecl != nil {
-				if structDecl.Comment == nil {
-					structDecl.Comment = &codegen.Comment{}
-				}
-				structDecl.Comment.Text = "@internal\n" + structDecl.Comment.Text
-			}
+	comment := strings.Join(commentLines, "\n")
+	g.builder.AddDecl(astgen.TypeDef(def.Name, "any", comment))
+	return nil
+}
+
+// generateComplexStruct generates a discriminated union using marker interface pattern.
+func (g *Generator) generateComplexStruct(name string, schema *jsondef.Schema) error {
+	allVariants := make([]*jsondef.Schema, 0, len(schema.AnyOf)+len(schema.OneOf))
+	allVariants = append(allVariants, schema.AnyOf...)
+	allVariants = append(allVariants, schema.OneOf...)
+
+	// Use explicit discriminator if available, otherwise detect
+	var discriminatorField string
+	if schema.Discriminator != nil && schema.Discriminator.PropertyName != "" {
+		discriminatorField = schema.Discriminator.PropertyName
+	} else {
+		discriminatorField = jsondef.DetectDiscriminator(allVariants)
+	}
+
+	if discriminatorField == "" {
+		// No discriminator found — treat as regular struct or fallback
+		comment := ""
+		if schema.Description != nil {
+			comment = *schema.Description
+		}
+		return g.generateStruct(name, schema, comment)
+	}
+
+	// Collect variants
+	variants := g.collectVariants(name, schema, allVariants, discriminatorField)
+	if len(variants) == 0 {
+		comment := ""
+		if schema.Description != nil {
+			comment = *schema.Description
+		}
+		return g.generateStruct(name, schema, comment)
+	}
+
+	// Generate marker interface
+	markerName := strings.ToLower(name[:1]) + name[1:] + "Variant"
+	markerMethodName := "is" + name + "Variant"
+
+	// Generate marker interface method on each variant struct
+	for _, v := range variants {
+		methodSrc := fmt.Sprintf(`func (%s) %s() string { return "%s" }`,
+			v.TypeName, markerMethodName, v.DiscValue)
+		fn, err := astgen.CreateMethodFromSource(methodSrc)
+		if err != nil {
+			return fmt.Errorf("failed to create marker method for %s: %w", v.TypeName, err)
+		}
+		g.builder.AddDecl(fn)
+	}
+
+	// Generate marker interface type
+	interfaceSrc := fmt.Sprintf(`type %s interface { %s() string }`, markerName, markerMethodName)
+	decls, err := astgen.CreateDeclsFromSource(interfaceSrc)
+	if err != nil {
+		return fmt.Errorf("failed to create marker interface: %w", err)
+	}
+	for _, d := range decls {
+		g.builder.AddDecl(d)
+	}
+
+	// Generate union struct
+	comment := ""
+	if schema.Description != nil {
+		comment = *schema.Description
+	}
+	g.builder.AddDecl(astgen.StructDef(name, []astgen.StructField{
+		{Name: "variant", Type: astgen.Ident(markerName)},
+	}, comment))
+
+	// Check if any variant uses direct ref (needs discriminator injection in marshal)
+	hasDirectRef := false
+	for _, v := range variants {
+		if v.DirectRef {
+			hasDirectRef = true
 			break
 		}
 	}
+
+	// Generate MarshalJSON
+	g.builder.AddImport("encoding/json")
+	g.builder.AddImport("fmt")
+	if hasDirectRef {
+		g.generateMarshalJSONWithDiscriminator(name, discriminatorField)
+	} else {
+		g.generateMarshalJSON(name, variants)
+	}
+
+	// Generate UnmarshalJSON
+	g.generateUnmarshalJSON(name, variants, discriminatorField)
+
+	// Generate As* accessor methods
+	g.generateAccessors(name, variants)
+
+	return nil
 }
 
-// isTypeIgnored checks if a type should be ignored during generation
-func (g *Generator) isTypeIgnored(typeName string) bool {
-	for _, ignoredType := range g.config.IgnoreTypes {
-		if typeName == ignoredType {
-			return true
+func (g *Generator) collectVariants(parentName string, _ *jsondef.Schema, allVariants []*jsondef.Schema, discriminatorField string) []OneOfVariant {
+	var variants []OneOfVariant
+
+	// Check if any variant name would collide with its ref type name.
+	// If so, use ref types directly without creating wrapper structs.
+	directRef := g.hasVariantNameConflict(parentName, allVariants, discriminatorField)
+
+	for _, variant := range allVariants {
+		if jsondef.IsNullType(variant) {
+			continue
+		}
+
+		// Process variants with discriminator const
+		if variant.Properties != nil {
+			discProp, exists := variant.Properties[discriminatorField]
+			if exists && discProp.Const != nil {
+				value, ok := discProp.Const.StringValue()
+				if !ok {
+					continue
+				}
+
+				variantName := toTitleCase(parentName) + toTitleCase(value)
+				fieldName := value
+
+				if len(variant.AllOf) > 0 && variant.AllOf[0].Ref != "" {
+					refTypeName := jsondef.ResolveRefGo(variant.AllOf[0].Ref)
+					goRefTypeName := toTitleCase(refTypeName)
+
+					if directRef {
+						// Use ref type directly — no wrapper struct
+						variants = append(variants, OneOfVariant{
+							FieldName: fieldName,
+							TypeName:  goRefTypeName,
+							DiscValue: value,
+							DirectRef: true,
+						})
+						continue
+					}
+
+					// Normal: create wrapper struct with anonymous embed
+					mergedSchema := g.mergeAllOfWithProperties(variant)
+					desc := ""
+					if variant.Description != nil {
+						desc = *variant.Description
+					}
+
+					var fields []astgen.StructField
+					fields = append(fields, astgen.StructField{
+						Type:  astgen.Ident(goRefTypeName),
+						Embed: true,
+					})
+					fields = append(fields, astgen.StructField{
+						Name: toTitleCase(discriminatorField),
+						Type: astgen.TypeExpr("string"),
+						Tag:  `json:"` + discriminatorField + `"`,
+					})
+
+					for propName, propSchema := range mergedSchema.Properties {
+						if propName == discriminatorField {
+							continue
+						}
+						def := jsondef.Classify(propName, propSchema)
+						field, err := g.buildStructField(propName, propSchema, def, mergedSchema)
+						if err != nil {
+							continue
+						}
+						fields = append(fields, field)
+					}
+
+					g.builder.AddDecl(astgen.StructDef(variantName, fields, desc))
+				} else {
+					// Generate the variant struct normally
+					desc := ""
+					if variant.Description != nil {
+						desc = *variant.Description
+					}
+					if err := g.generateStruct(variantName, variant, desc); err != nil {
+						continue
+					}
+				}
+
+				variants = append(variants, OneOfVariant{
+					FieldName: fieldName,
+					TypeName:  variantName,
+					DiscValue: value,
+				})
+				continue
+			}
+		}
+
+		// Handle default variants (no discriminator const, pure allOf ref)
+		if len(variant.AllOf) > 0 && variant.AllOf[0].Ref != "" {
+			refTypeName := jsondef.ResolveRefGo(variant.AllOf[0].Ref)
+			goRefTypeName := toTitleCase(refTypeName)
+			// Derive short field name by stripping parent prefix
+			fieldName := strings.TrimPrefix(goRefTypeName, toTitleCase(parentName))
+			if fieldName == "" {
+				fieldName = goRefTypeName
+			}
+			variants = append(variants, OneOfVariant{
+				FieldName: fieldName,
+				TypeName:  goRefTypeName,
+				DiscValue: "", // default variant
+				DirectRef: true,
+			})
+		}
+	}
+
+	return variants
+}
+
+// hasVariantNameConflict checks if creating wrapper types would cause naming conflicts
+// with the referenced types (e.g., MCPServer + "http" → MCPServerHTTP == McpServerHttp).
+func (g *Generator) hasVariantNameConflict(parentName string, allVariants []*jsondef.Schema, discriminatorField string) bool {
+	for _, variant := range allVariants {
+		if variant.Properties == nil {
+			continue
+		}
+		discProp, exists := variant.Properties[discriminatorField]
+		if !exists || discProp.Const == nil {
+			continue
+		}
+		value, ok := discProp.Const.StringValue()
+		if !ok {
+			continue
+		}
+		if len(variant.AllOf) > 0 && variant.AllOf[0].Ref != "" {
+			refTypeName := jsondef.ResolveRefGo(variant.AllOf[0].Ref)
+			variantName := toTitleCase(parentName) + toTitleCase(value)
+			if variantName == toTitleCase(refTypeName) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// addSkippedItem adds a definition to the skipped items list
+// mergeAllOfWithProperties merges allOf referenced schemas with inline properties.
+func (g *Generator) mergeAllOfWithProperties(schema *jsondef.Schema) *jsondef.Schema {
+	merged := &jsondef.Schema{
+		Properties: make(map[string]*jsondef.Schema),
+		Required:   schema.Required,
+	}
+	// Copy inline properties
+	for k, v := range schema.Properties {
+		merged.Properties[k] = v
+	}
+	return merged
+}
+
+func (g *Generator) generateMarshalJSON(typeName string, _ []OneOfVariant) {
+	recv := strings.ToLower(typeName[:1])
+
+	src := fmt.Sprintf(`func (%s %s) MarshalJSON() ([]byte, error) {
+	if %s.variant == nil {
+		return nil, fmt.Errorf("no variant is set for %s")
+	}
+	return json.Marshal(%s.variant)
+}`, recv, typeName, recv, typeName, recv)
+
+	fn, err := astgen.CreateMethodFromSource(src)
+	if err != nil {
+		fmt.Printf("Warning: failed to generate MarshalJSON for %s: %v\n", typeName, err)
+		return
+	}
+	g.builder.AddDecl(fn)
+}
+
+// generateMarshalJSONWithDiscriminator generates MarshalJSON that injects the discriminator
+// field into the JSON output. Used when variant types are referenced directly (no wrapper struct).
+func (g *Generator) generateMarshalJSONWithDiscriminator(typeName string, discriminatorField string) {
+	recv := strings.ToLower(typeName[:1])
+	markerMethodName := "is" + typeName + "Variant"
+
+	src := fmt.Sprintf(`func (%s %s) MarshalJSON() ([]byte, error) {
+	if %s.variant == nil {
+		return nil, fmt.Errorf("no variant is set for %s")
+	}
+	data, err := json.Marshal(%s.variant)
+	if err != nil {
+		return nil, err
+	}
+	disc := %s.variant.%s()
+	if disc == "" {
+		return data, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil, err
+	}
+	obj["%s"], _ = json.Marshal(disc)
+	return json.Marshal(obj)
+}`, recv, typeName, recv, typeName, recv, recv, markerMethodName, discriminatorField)
+
+	fn, err := astgen.CreateMethodFromSource(src)
+	if err != nil {
+		fmt.Printf("Warning: failed to generate MarshalJSON for %s: %v\n", typeName, err)
+		return
+	}
+	g.builder.AddDecl(fn)
+}
+
+func (g *Generator) generateUnmarshalJSON(typeName string, variants []OneOfVariant, discriminatorField string) {
+	recv := strings.ToLower(typeName[:1])
+	discFieldName := toTitleCase(discriminatorField)
+
+	var cases []string
+	var defaultVariant *OneOfVariant
+	for _, v := range variants {
+		if v.DiscValue == "" {
+			defaultVariant = &v
+			continue
+		}
+		cases = append(cases, fmt.Sprintf(`	case "%s":
+		var v %s
+		if err := json.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		%s.variant = v
+		return nil`, v.DiscValue, v.TypeName, recv))
+	}
+
+	// Add default case
+	defaultCase := fmt.Sprintf(`	return fmt.Errorf("unknown discriminator value: %%s", disc.%s)`, discFieldName)
+	if defaultVariant != nil {
+		defaultCase = fmt.Sprintf(`	var v %s
+		if err := json.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		%s.variant = v
+		return nil`, defaultVariant.TypeName, recv)
+	}
+
+	src := fmt.Sprintf(`func (%s *%s) UnmarshalJSON(data []byte) error {
+	var disc struct {
+		%s string `+"`"+`json:"%s"`+"`"+`
+	}
+	if err := json.Unmarshal(data, &disc); err != nil {
+		return err
+	}
+	switch disc.%s {
+%s
+	default:
+		%s
+	}
+}`, recv, typeName, discFieldName, discriminatorField, discFieldName, strings.Join(cases, "\n"), defaultCase)
+
+	fn, err := astgen.CreateMethodFromSource(src)
+	if err != nil {
+		fmt.Printf("Warning: failed to generate UnmarshalJSON for %s: %v\n", typeName, err)
+		return
+	}
+	g.builder.AddDecl(fn)
+}
+
+func (g *Generator) generateAccessors(typeName string, variants []OneOfVariant) {
+	recv := strings.ToLower(typeName[:1])
+
+	for _, v := range variants {
+		accessorName := "As" + toTitleCase(v.FieldName)
+		src := fmt.Sprintf(`func (%s *%s) %s() (%s, bool) {
+	v, ok := %s.variant.(%s)
+	return v, ok
+}`, recv, typeName, accessorName, v.TypeName, recv, v.TypeName)
+
+		fn, err := astgen.CreateMethodFromSource(src)
+		if err != nil {
+			fmt.Printf("Warning: failed to generate accessor %s for %s: %v\n", accessorName, typeName, err)
+			continue
+		}
+		g.builder.AddDecl(fn)
+	}
+}
+
+// generateConstants generates constants from metadata.
+func (g *Generator) generateConstants() {
+	if g.metadata == nil {
+		return
+	}
+
+	// Load base metadata if excludeMetaFrom is set
+	var baseMeta *Metadata
+	if g.config.ExcludeMetaFrom != "" {
+		var err error
+		baseMeta, err = LoadMetadata(g.config.ExcludeMetaFrom)
+		if err != nil {
+			fmt.Printf("Warning: Failed to load base metadata for exclusion: %v\n", err)
+		}
+	}
+
+	// Protocol version constant (skip if same as base)
+	if baseMeta == nil || g.metadata.Version != baseMeta.Version {
+		g.builder.AddRawDecl(astgen.SingleConstSource(
+			"CurrentProtocolVersion", "int",
+			fmt.Sprintf("%d", g.metadata.Version),
+			"Current protocol version from metadata",
+		))
+	}
+
+	// Determine suffix for unstable-only constants
+	suffix := ""
+	if baseMeta != nil {
+		suffix = "Unstable"
+	}
+
+	// Agent methods (only new ones)
+	agentMethods := diffMethods(g.metadata.AgentMethods, baseMeta.getAgentMethods())
+	if len(agentMethods) > 0 {
+		g.generateStructuredConstants("AgentMethods"+suffix, agentMethods, "Agent method names (unstable)")
+	}
+
+	// Client methods (only new ones)
+	clientMethods := diffMethods(g.metadata.ClientMethods, baseMeta.getClientMethods())
+	if len(clientMethods) > 0 {
+		g.generateStructuredConstants("ClientMethods"+suffix, clientMethods, "Client method names (unstable)")
+	}
+}
+
+// diffMethods returns entries in methods that are not in base (or differ).
+func diffMethods(methods, base map[string]string) map[string]string {
+	if base == nil {
+		return methods
+	}
+	result := make(map[string]string)
+	for k, v := range methods {
+		if baseV, ok := base[k]; !ok || baseV != v {
+			result[k] = v
+		}
+	}
+	return result
+}
+
+func (g *Generator) generateStructuredConstants(varName string, methods map[string]string, comment string) {
+	keys := make([]string, 0, len(methods))
+	for key := range methods {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	entries := make([]astgen.StructVarEntry, 0, len(keys))
+	for _, key := range keys {
+		entries = append(entries, astgen.StructVarEntry{
+			Name:  formatFieldName(key),
+			Type:  "string",
+			Value: methods[key],
+		})
+	}
+
+	g.builder.AddDecl(astgen.VarAnonymousStruct(varName, entries, comment))
+}
+
+func formatFieldName(key string) string {
+	return toTitleCase(key)
+}
+
+func (g *Generator) isTypeIgnored(typeName string) bool {
+	if slices.Contains(g.config.IgnoreTypes, typeName) {
+		return true
+	}
+	if g.excludedDefNames[typeName] {
+		return true
+	}
+	return false
+}
+
 func (g *Generator) addSkippedItem(name string) {
-	g.skippedCount++
 	g.skippedItems = append(g.skippedItems, name)
 }
+

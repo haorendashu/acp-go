@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	acp "github.com/ironpark/acp-go"
+	acp "github.com/ironpark/go-acp"
 )
 
 // ExampleClient implements the acp.Client interface
@@ -44,7 +44,7 @@ func (c *ExampleClient) RequestPermission(ctx context.Context, params *acp.Reque
 		if optionIndex >= 1 && optionIndex <= len(params.Options) {
 			selectedOption := params.Options[optionIndex-1]
 			return &acp.RequestPermissionResponse{
-				Outcome: acp.NewRequestPermissionOutcomeSelected(selectedOption.OptionId),
+				Outcome: acp.NewRequestPermissionOutcomeSelected(selectedOption.OptionID),
 			}, nil
 		} else {
 			fmt.Printf("Invalid option. Please choose a number between 1 and %d.\n", len(params.Options))
@@ -55,30 +55,27 @@ func (c *ExampleClient) RequestPermission(ctx context.Context, params *acp.Reque
 func (c *ExampleClient) SessionUpdate(ctx context.Context, params *acp.SessionNotification) error {
 	update := params.Update
 
-	if update.IsAgentmessagechunk() {
-		chunk := update.GetAgentmessagechunk()
-		if chunk.Content.IsText() {
-			fmt.Print(chunk.Content.GetText().Text)
+	if chunk, ok := update.AsAgentMessageChunk(); ok {
+		if text, ok := chunk.Content.AsText(); ok {
+			fmt.Print(text.Text)
 		} else {
-			fmt.Printf("[%s]", chunk.Content.GetText().Type)
+			fmt.Print("[non-text content]")
 		}
-	} else if update.IsToolcall() {
-		toolCall := update.GetToolcall()
+	} else if toolCall, ok := update.AsToolCall(); ok {
 		fmt.Printf("\n🔧 %s", toolCall.Title)
 		if toolCall.Status != nil {
 			fmt.Printf(" (%s)", *toolCall.Status)
 		}
 		fmt.Println()
-	} else if update.IsToolcallupdate() {
-		toolUpdate := update.GetToolcallupdate()
-		fmt.Printf("\n🔧 Tool call `%s` updated", toolUpdate.ToolCallId)
+	} else if toolUpdate, ok := update.AsToolCallUpdate(); ok {
+		fmt.Printf("\n🔧 Tool call `%s` updated", toolUpdate.ToolCallID)
 		if toolUpdate.Status != nil {
 			fmt.Printf(": %s", *toolUpdate.Status)
 		}
 		fmt.Println()
-	} else if update.IsPlan() {
+	} else if _, ok := update.AsPlan(); ok {
 		fmt.Println("[plan update]")
-	} else if update.IsUsermessagechunk() {
+	} else if _, ok := update.AsUserMessageChunk(); ok {
 		fmt.Println("[user message chunk]")
 	} else {
 		fmt.Println("[unknown session update]")
@@ -87,9 +84,9 @@ func (c *ExampleClient) SessionUpdate(ctx context.Context, params *acp.SessionNo
 	return nil
 }
 
-func (c *ExampleClient) WriteTextFile(ctx context.Context, params *acp.WriteTextFileRequest) error {
+func (c *ExampleClient) WriteTextFile(ctx context.Context, params *acp.WriteTextFileRequest) (*acp.WriteTextFileResponse, error) {
 	fmt.Printf("[Client] Write text file called with: %+v\n", params)
-	return nil
+	return &acp.WriteTextFileResponse{}, nil
 }
 
 func (c *ExampleClient) ReadTextFile(ctx context.Context, params *acp.ReadTextFileRequest) (*acp.ReadTextFileResponse, error) {
@@ -102,7 +99,7 @@ func (c *ExampleClient) ReadTextFile(ctx context.Context, params *acp.ReadTextFi
 func (c *ExampleClient) CreateTerminal(ctx context.Context, params *acp.CreateTerminalRequest) (*acp.CreateTerminalResponse, error) {
 	fmt.Printf("[Client] Create terminal called with: %+v\n", params)
 	return &acp.CreateTerminalResponse{
-		TerminalId: "mock-terminal-id",
+		TerminalID: "mock-terminal-id",
 	}, nil
 }
 
@@ -115,9 +112,9 @@ func (c *ExampleClient) TerminalOutput(ctx context.Context, params *acp.Terminal
 	}, nil
 }
 
-func (c *ExampleClient) ReleaseTerminal(ctx context.Context, params *acp.ReleaseTerminalRequest) error {
+func (c *ExampleClient) ReleaseTerminal(ctx context.Context, params *acp.ReleaseTerminalRequest) (*acp.ReleaseTerminalResponse, error) {
 	fmt.Printf("[Client] Release terminal called with: %+v\n", params)
-	return nil
+	return &acp.ReleaseTerminalResponse{}, nil
 }
 
 func (c *ExampleClient) WaitForTerminalExit(ctx context.Context, params *acp.WaitForTerminalExitRequest) (*acp.WaitForTerminalExitResponse, error) {
@@ -128,9 +125,9 @@ func (c *ExampleClient) WaitForTerminalExit(ctx context.Context, params *acp.Wai
 	}, nil
 }
 
-func (c *ExampleClient) KillTerminalCommand(ctx context.Context, params *acp.KillTerminalCommandRequest) error {
+func (c *ExampleClient) KillTerminalCommand(ctx context.Context, params *acp.KillTerminalRequest) (*acp.KillTerminalResponse, error) {
 	fmt.Printf("[Client] Kill terminal command called with: %+v\n", params)
-	return nil
+	return &acp.KillTerminalResponse{}, nil
 }
 
 func main() {
@@ -209,7 +206,7 @@ func main() {
 	initResult, err := connection.Initialize(ctx, &acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersion(acp.CurrentProtocolVersion),
 		ClientCapabilities: &acp.ClientCapabilities{
-			Fs: &acp.FileSystemCapability{
+			FS: &acp.FileSystemCapabilities{
 				ReadTextFile:  true,
 				WriteTextFile: true,
 			},
@@ -227,20 +224,20 @@ func main() {
 	cwd, _ := os.Getwd()
 	sessionResult, err := connection.NewSession(ctx, &acp.NewSessionRequest{
 		Cwd:        cwd,
-		McpServers: []acp.McpServer{},
+		MCPServers: []acp.MCPServer{},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create session: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("📝 Created session: %s\n", sessionResult.SessionId)
+	fmt.Printf("📝 Created session: %s\n", sessionResult.SessionID)
 	fmt.Printf("💬 User: Hello, agent!\n\n")
 	fmt.Print(" ")
 
 	// Send a test prompt
 	promptResult, err := connection.Prompt(ctx, &acp.PromptRequest{
-		SessionId: sessionResult.SessionId,
+		SessionID: sessionResult.SessionID,
 		Prompt: []acp.ContentBlock{
 			acp.NewContentBlockText("Hello, agent!"),
 		},

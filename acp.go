@@ -2,12 +2,23 @@ package acp
 
 //go:generate sh -c "cd internal/cmd/schema && go run . gen -config ../../../.schema.yaml"
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Agent represents the interface that agents must implement to handle client requests.
 //
-// This interface defines all the methods that an agent can receive from a client
+// This interface defines all the stable methods that an agent can receive from a client
 // according to the Agent Client Protocol specification.
+//
+// Optional capabilities can be advertised by implementing additional interfaces:
+//   - [SessionForker] for session/fork (unstable)
+//   - [SessionResumer] for session/resume (unstable)
+//   - [SessionCloser] for session/close (unstable)
+//   - [ModelSetter] for session/set_model (unstable)
+//   - [ExtMethodHandler] for custom extension methods
+//   - [ExtNotificationHandler] for custom extension notifications
 //
 // See protocol docs: [Agent](https://agentclientprotocol.com/protocol/overview#agent)
 type Agent interface {
@@ -24,7 +35,7 @@ type Agent interface {
 	// Called when the client needs to authenticate the user with the agent.
 	//
 	// See protocol docs: [Authentication](https://agentclientprotocol.com/protocol/authentication)
-	Authenticate(ctx context.Context, params *AuthenticateRequest) error
+	Authenticate(ctx context.Context, params *AuthenticateRequest) (*AuthenticateResponse, error)
 
 	// NewSession creates a new conversation session.
 	//
@@ -33,17 +44,29 @@ type Agent interface {
 	// See protocol docs: [Creating a Session](https://agentclientprotocol.com/protocol/session-setup#creating-a-session)
 	NewSession(ctx context.Context, params *NewSessionRequest) (*NewSessionResponse, error)
 
-	// LoadSession loads an existing conversation session (optional).
+	// LoadSession loads an existing conversation session.
 	//
-	// Only called if the agent advertises the `loadSession` capability.
+	// Only called if the agent advertises the loadSession capability.
 	//
 	// See protocol docs: [Loading Sessions](https://agentclientprotocol.com/protocol/session-setup#loading-sessions)
 	LoadSession(ctx context.Context, params *LoadSessionRequest) (*LoadSessionResponse, error)
 
-	// SetSessionMode changes the current session mode (optional, unstable).
+	// ListSessions lists available sessions.
 	//
-	// This method is not part of the stable spec and may be removed or changed.
-	SetSessionMode(ctx context.Context, params *SetSessionModeRequest) error
+	// Only called if the agent advertises the sessionCapabilities.list capability.
+	//
+	// See protocol docs: [Listing Sessions](https://agentclientprotocol.com/protocol/session-setup#listing-sessions)
+	ListSessions(ctx context.Context, params *ListSessionsRequest) (*ListSessionsResponse, error)
+
+	// SetSessionMode changes the current session mode.
+	//
+	// See protocol docs: [Session Modes](https://agentclientprotocol.com/protocol/session-modes)
+	SetSessionMode(ctx context.Context, params *SetSessionModeRequest) (*SetSessionModeResponse, error)
+
+	// SetSessionConfigOption updates a session configuration option.
+	//
+	// See protocol docs: [Session Config Options](https://agentclientprotocol.com/protocol/session-config-options)
+	SetSessionConfigOption(ctx context.Context, params *SetSessionConfigOptionRequest) (*SetSessionConfigOptionResponse, error)
 
 	// Prompt processes a user prompt and generates a response.
 	//
@@ -58,6 +81,50 @@ type Agent interface {
 	//
 	// See protocol docs: [Cancellation](https://agentclientprotocol.com/protocol/prompt-turn#cancellation)
 	Cancel(ctx context.Context, params *CancelNotification) error
+}
+
+// SessionForker is an optional interface for agents that support session forking (unstable).
+//
+// Implement this interface to allow clients to fork sessions.
+type SessionForker interface {
+	ForkSession(ctx context.Context, params *ForkSessionRequest) (*ForkSessionResponse, error)
+}
+
+// SessionResumer is an optional interface for agents that support session resuming (unstable).
+//
+// Implement this interface to allow clients to resume sessions without replaying history.
+type SessionResumer interface {
+	ResumeSession(ctx context.Context, params *ResumeSessionRequest) (*ResumeSessionResponse, error)
+}
+
+// SessionCloser is an optional interface for agents that support session closing (unstable).
+//
+// Implement this interface to allow clients to explicitly close sessions.
+type SessionCloser interface {
+	CloseSession(ctx context.Context, params *CloseSessionRequest) (*CloseSessionResponse, error)
+}
+
+// ModelSetter is an optional interface for agents that support model selection (unstable).
+//
+// Implement this interface to allow clients to change the model during a session.
+type ModelSetter interface {
+	SetSessionModel(ctx context.Context, params *SetSessionModelRequest) (*SetSessionModelResponse, error)
+}
+
+// ExtMethodHandler is an optional interface for handling custom extension methods.
+//
+// Implement this interface on Agent or Client to handle custom protocol extension
+// methods. Extension methods should be prefixed with an underscore (e.g., "_myMethod").
+type ExtMethodHandler interface {
+	ExtMethod(ctx context.Context, method string, params json.RawMessage) (any, error)
+}
+
+// ExtNotificationHandler is an optional interface for handling custom extension notifications.
+//
+// Implement this interface on Agent or Client to handle custom protocol extension
+// notifications. Extension methods should be prefixed with an underscore (e.g., "_myNotification").
+type ExtNotificationHandler interface {
+	ExtNotification(ctx context.Context, method string, params json.RawMessage) error
 }
 
 // Client represents the interface for communicating with the client from an agent.
@@ -84,32 +151,32 @@ type Client interface {
 
 	// ReadTextFile reads content from a text file in the client's file system.
 	//
-	// Only available if the client supports the `fs.readTextFile` capability.
+	// Only available if the client supports the fs.readTextFile capability.
 	//
 	// See protocol docs: [FileSystem](https://agentclientprotocol.com/protocol/initialization#filesystem)
 	ReadTextFile(ctx context.Context, params *ReadTextFileRequest) (*ReadTextFileResponse, error)
 
 	// WriteTextFile writes content to a text file in the client's file system.
 	//
-	// Only available if the client supports the `fs.writeTextFile` capability.
+	// Only available if the client supports the fs.writeTextFile capability.
 	//
 	// See protocol docs: [FileSystem](https://agentclientprotocol.com/protocol/initialization#filesystem)
-	WriteTextFile(ctx context.Context, params *WriteTextFileRequest) error
+	WriteTextFile(ctx context.Context, params *WriteTextFileRequest) (*WriteTextFileResponse, error)
 
-	// CreateTerminal creates a new terminal session (unstable).
+	// CreateTerminal creates a new terminal session.
 	//
-	// This method is not part of the stable spec and may be removed or changed.
+	// Only available if the client supports the terminal capability.
 	CreateTerminal(ctx context.Context, params *CreateTerminalRequest) (*CreateTerminalResponse, error)
 
-	// TerminalOutput gets the current output and status of a terminal (unstable).
+	// TerminalOutput gets the current output and status of a terminal.
 	TerminalOutput(ctx context.Context, params *TerminalOutputRequest) (*TerminalOutputResponse, error)
 
-	// ReleaseTerminal releases a terminal and frees its resources (unstable).
-	ReleaseTerminal(ctx context.Context, params *ReleaseTerminalRequest) error
+	// ReleaseTerminal releases a terminal and frees its resources.
+	ReleaseTerminal(ctx context.Context, params *ReleaseTerminalRequest) (*ReleaseTerminalResponse, error)
 
-	// WaitForTerminalExit waits for a terminal command to exit (unstable).
+	// WaitForTerminalExit waits for a terminal command to exit.
 	WaitForTerminalExit(ctx context.Context, params *WaitForTerminalExitRequest) (*WaitForTerminalExitResponse, error)
 
-	// KillTerminalCommand kills a terminal command without releasing the terminal (unstable).
-	KillTerminalCommand(ctx context.Context, params *KillTerminalCommandRequest) error
+	// KillTerminalCommand kills a terminal command without releasing the terminal.
+	KillTerminalCommand(ctx context.Context, params *KillTerminalRequest) (*KillTerminalResponse, error)
 }

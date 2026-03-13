@@ -1,3 +1,3 @@
-module github.com/ironpark/acp-go
+module github.com/ironpark/go-acp
 
-go 1.21
+go 1.26.1

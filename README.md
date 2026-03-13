@@ -1,7 +1,5 @@
 ![agent client protocol golang banner](./docs/imgs/banner-dark.jpg)
 
-**🇺🇸 English** | [🇰🇷 한국어](./docs/README.ko.md)
-
 # Agent Client Protocol - Go Implementation
 
 A Go implementation of the Agent Client Protocol (ACP), which standardizes communication between _code editors_ (interactive programs for viewing and editing source code) and _coding agents_ (programs that use generative AI to autonomously modify code).
@@ -66,6 +64,10 @@ This implementation supports ACP Protocol Version 1 with the following features:
 This is an unofficial implementation. For protocol specification changes, please contribute to the [official repository](https://github.com/zed-industries/agent-client-protocol).
 
 For Go implementation issues and improvements, please open an issue or pull request.
+
+## License
+
+This implementation follows the same license as the official ACP specification.
 
 ## Related Projects
 

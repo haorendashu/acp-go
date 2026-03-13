@@ -6,54 +6,47 @@ import (
 )
 
 func TestTerminalHandle(t *testing.T) {
-	// Test creating a TerminalHandle
-	sessionID := SessionId("test-session")
+	sessionID := SessionID("test-session")
 	terminalID := "test-terminal"
-	
-	// Create a mock connection (we don't need real connection for structure tests)
-	conn := &Connection{}
-	
-	handle := NewTerminalHandle(terminalID, sessionID, conn)
-	
-	// Test that the handle was created correctly
+
+	// Use TestClient as the terminalClient (it implements all terminal methods)
+	client := &TestClient{}
+
+	handle := NewTerminalHandle(terminalID, sessionID, client)
+
 	if handle.ID != terminalID {
 		t.Errorf("Expected terminal ID %s, got %s", terminalID, handle.ID)
 	}
-	
+
 	if handle.sessionID != sessionID {
 		t.Errorf("Expected session ID %s, got %s", sessionID, handle.sessionID)
 	}
-	
-	if handle.conn != conn {
-		t.Error("Expected connection to be set")
+
+	if handle.client != client {
+		t.Error("Expected client to be set")
 	}
 }
 
 func TestTerminalHandleMatchesTypeScriptAPI(t *testing.T) {
-	// This test documents that our Go TerminalHandle matches the TypeScript API structure
-	// by verifying method signatures exist and compile
-	
-	conn := &Connection{}
-	handle := NewTerminalHandle("test", SessionId("session"), conn)
-	
-	// Verify all methods exist by checking their signatures
-	// These should compile successfully, proving the methods exist
-	
+	client := &TestClient{}
+	handle := NewTerminalHandle("test", SessionID("session"), client)
+
+	// Verify all methods exist by checking their signatures compile
 	_ = func(ctx context.Context) (*TerminalOutputResponse, error) {
-		return handle.CurrentOutput(ctx)  // matches TypeScript currentOutput()
+		return handle.CurrentOutput(ctx)
 	}
-	
+
 	_ = func(ctx context.Context) (*WaitForTerminalExitResponse, error) {
-		return handle.WaitForExit(ctx)    // matches TypeScript waitForExit()
+		return handle.WaitForExit(ctx)
 	}
-	
+
 	_ = func(ctx context.Context) error {
-		return handle.Kill(ctx)           // matches TypeScript kill()
+		return handle.Kill(ctx)
 	}
-	
+
 	_ = func(ctx context.Context) error {
-		return handle.Release(ctx)        // matches TypeScript release()
+		return handle.Release(ctx)
 	}
-	
+
 	t.Log("All TypeScript-equivalent methods are implemented with correct signatures")
 }
