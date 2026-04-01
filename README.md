@@ -164,6 +164,7 @@ This implementation supports ACP Protocol Version 1 with the following features:
 ### Agent Methods (Client → Agent)
 - `initialize` - Initialize the agent and negotiate capabilities
 - `authenticate` - Authenticate with the agent (optional)
+- `logout` - Log out current authenticated state (unstable)
 - `session/new` - Create a new conversation session
 - `session/load` - Load an existing session (if supported)
 - `session/list` - List available sessions
@@ -175,6 +176,8 @@ This implementation supports ACP Protocol Version 1 with the following features:
 ### Client Methods (Agent → Client)
 - `session/update` - Send session updates (notifications)
 - `session/request_permission` - Request user permission for operations
+- `session/elicitation` - Request structured user input (unstable)
+- `session/elicitation/complete` - Notify URL-based elicitation completion (unstable)
 - `fs/read_text_file` - Read text file from client filesystem
 - `fs/write_text_file` - Write text file to client filesystem
 - **Terminal Support** (unstable):

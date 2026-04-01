@@ -147,6 +147,11 @@ func (c *AgentSideConnection) handleIncomingMethod(ctx context.Context, method s
 		return unmarshalAndCall(ctx, params, c.agent.Initialize)
 	case AgentMethods.Authenticate:
 		return unmarshalAndCall(ctx, params, c.agent.Authenticate)
+	case AgentMethods.Logout:
+		if logouter, ok := c.agent.(SessionLogouter); ok {
+			return unmarshalAndCall(ctx, params, logouter.Logout)
+		}
+		return nil, ErrMethodNotFound(method)
 	case AgentMethods.SessionNew:
 		if creator, ok := c.agent.(SessionCreator); ok {
 			return unmarshalAndCall(ctx, params, creator.NewSession)
@@ -180,23 +185,23 @@ func (c *AgentSideConnection) handleIncomingMethod(ctx context.Context, method s
 	case AgentMethods.SessionCancel:
 		return unmarshalAndCallVoid(ctx, params, c.agent.Cancel)
 
-	// Unstable agent methods — dispatched via optional interfaces
-	case AgentMethodsUnstable.SessionFork:
+	// Optional session methods dispatched via capability-specific interfaces.
+	case AgentMethods.SessionFork:
 		if forker, ok := c.agent.(SessionForker); ok {
 			return unmarshalAndCall(ctx, params, forker.ForkSession)
 		}
 		return nil, ErrMethodNotFound(method)
-	case AgentMethodsUnstable.SessionResume:
+	case AgentMethods.SessionResume:
 		if resumer, ok := c.agent.(SessionResumer); ok {
 			return unmarshalAndCall(ctx, params, resumer.ResumeSession)
 		}
 		return nil, ErrMethodNotFound(method)
-	case AgentMethodsUnstable.SessionClose:
+	case AgentMethods.SessionClose:
 		if closer, ok := c.agent.(SessionCloser); ok {
 			return unmarshalAndCall(ctx, params, closer.CloseSession)
 		}
 		return nil, ErrMethodNotFound(method)
-	case AgentMethodsUnstable.SessionSetModel:
+	case AgentMethods.SessionSetModel:
 		if setter, ok := c.agent.(ModelSetter); ok {
 			return unmarshalAndCall(ctx, params, setter.SetSessionModel)
 		}

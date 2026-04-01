@@ -7,6 +7,27 @@ import (
 	"fmt"
 )
 
+// Allows the Agent to send an arbitrary notification that is not part of the ACP spec.
+// Extension notifications provide a way to send one-way messages for custom functionality
+// while maintaining protocol compatibility.
+//
+// See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+type ExtNotification any
+
+// Allows for sending an arbitrary request that is not part of the ACP spec.
+// Extension methods provide a way to add custom functionality while maintaining
+// protocol compatibility.
+//
+// See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+type ExtRequest any
+
+// Allows for sending an arbitrary response to an [`ExtRequest`] that is not part of the ACP spec.
+// Extension methods provide a way to add custom functionality while maintaining
+// protocol compatibility.
+//
+// See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+type ExtResponse any
+
 // Predefined error codes for common JSON-RPC and ACP-specific errors.
 //
 // These codes follow the JSON-RPC 2.0 specification for standard errors
@@ -182,6 +203,17 @@ const (
 	// Other tool types (default).
 	ToolKindOther ToolKind = "other"
 )
+
+type AgentResponse struct {
+	ID     RequestID       `json:"id"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *Error          `json:"error,omitempty"`
+}
+type ClientResponse struct {
+	ID     RequestID       `json:"id"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *Error          `json:"error,omitempty"`
+}
 
 // Text content. May be plain text or formatted with Markdown.
 //
@@ -558,6 +590,14 @@ type SessionUpdateSessionInfoUpdate struct {
 	SessionUpdate string `json:"sessionUpdate"`
 }
 
+// Context window and cost update for a session.
+//
+// See protocol docs: [Usage](https://agentclientprotocol.com/protocol/usage)
+type SessionUpdateUsageUpdate struct {
+	UsageUpdate
+	SessionUpdate string `json:"sessionUpdate"`
+}
+
 func (SessionUpdateUserMessageChunk) isSessionUpdateVariant() string {
 	return "user_message_chunk"
 }
@@ -587,6 +627,9 @@ func (SessionUpdateConfigOptionUpdate) isSessionUpdateVariant() string {
 }
 func (SessionUpdateSessionInfoUpdate) isSessionUpdateVariant() string {
 	return "session_info_update"
+}
+func (SessionUpdateUsageUpdate) isSessionUpdateVariant() string {
+	return "usage_update"
 }
 
 type sessionUpdateVariant interface{ isSessionUpdateVariant() string }
@@ -684,6 +727,13 @@ func (s *SessionUpdate) UnmarshalJSON(data []byte) error {
 		}
 		s.variant = v
 		return nil
+	case "usage_update":
+		var v SessionUpdateUsageUpdate
+		if err := json.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		s.variant = v
+		return nil
 	default:
 		return fmt.Errorf("unknown discriminator value: %s", disc.SessionUpdate)
 	}
@@ -726,6 +776,10 @@ func (s *SessionUpdate) AsConfigOptionUpdate() (SessionUpdateConfigOptionUpdate,
 }
 func (s *SessionUpdate) AsSessionInfoUpdate() (SessionUpdateSessionInfoUpdate, bool) {
 	v, ok := s.variant.(SessionUpdateSessionInfoUpdate)
+	return v, ok
+}
+func (s *SessionUpdate) AsUsageUpdate() (SessionUpdateUsageUpdate, bool) {
+	v, ok := s.variant.(SessionUpdateUsageUpdate)
 	return v, ok
 }
 
@@ -825,6 +879,16 @@ func (t *ToolCallContent) AsTerminal() (ToolCallContentTerminal, bool) {
 	return v, ok
 }
 
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Authentication-related capabilities supported by the agent.
+type AgentAuthCapabilities struct {
+	Meta   map[string]any      `json:"_meta,omitempty"`
+	Logout *LogoutCapabilities `json:"logout,omitempty"`
+}
+
 // Capabilities supported by the agent.
 //
 // Advertised during initialization to inform the client about
@@ -832,11 +896,21 @@ func (t *ToolCallContent) AsTerminal() (ToolCallContentTerminal, bool) {
 //
 // See protocol docs: [Agent Capabilities](https://agentclientprotocol.com/protocol/initialization#agent-capabilities)
 type AgentCapabilities struct {
-	Meta                map[string]any       `json:"_meta,omitempty"`
-	LoadSession         bool                 `json:"loadSession,omitempty"`
-	MCPCapabilities     *MCPCapabilities     `json:"mcpCapabilities,omitempty"`
-	PromptCapabilities  *PromptCapabilities  `json:"promptCapabilities,omitempty"`
-	SessionCapabilities *SessionCapabilities `json:"sessionCapabilities,omitempty"`
+	Meta                map[string]any         `json:"_meta,omitempty"`
+	Auth                *AgentAuthCapabilities `json:"auth,omitempty"`
+	LoadSession         bool                   `json:"loadSession,omitempty"`
+	MCPCapabilities     *MCPCapabilities       `json:"mcpCapabilities,omitempty"`
+	PromptCapabilities  *PromptCapabilities    `json:"promptCapabilities,omitempty"`
+	SessionCapabilities *SessionCapabilities   `json:"sessionCapabilities,omitempty"`
+}
+type AgentNotification struct {
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params,omitempty"`
+}
+type AgentRequest struct {
+	ID     RequestID       `json:"id"`
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params,omitempty"`
 }
 
 // Optional annotations for the client. The client can use annotations to inform how objects are used or displayed
@@ -853,6 +927,20 @@ type AudioContent struct {
 	Annotations *Annotations   `json:"annotations,omitempty"`
 	Data        string         `json:"data"`
 	MimeType    string         `json:"mimeType"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Authentication capabilities supported by the client.
+//
+// Advertised during initialization to inform the agent which authentication
+// method types the client can handle. This governs opt-in types that require
+// additional client-side support.
+type AuthCapabilities struct {
+	Meta     map[string]any `json:"_meta,omitempty"`
+	Terminal bool           `json:"terminal,omitempty"`
 }
 
 // Agent handles authentication itself.
@@ -915,9 +1003,45 @@ type CancelNotification struct {
 //
 // See protocol docs: [Client Capabilities](https://agentclientprotocol.com/protocol/initialization#client-capabilities)
 type ClientCapabilities struct {
-	Meta     map[string]any          `json:"_meta,omitempty"`
-	FS       *FileSystemCapabilities `json:"fs,omitempty"`
-	Terminal bool                    `json:"terminal,omitempty"`
+	Meta        map[string]any           `json:"_meta,omitempty"`
+	Auth        *AuthCapabilities        `json:"auth,omitempty"`
+	Elicitation *ElicitationCapabilities `json:"elicitation,omitempty"`
+	FS          *FileSystemCapabilities  `json:"fs,omitempty"`
+	Terminal    bool                     `json:"terminal,omitempty"`
+}
+type ClientNotification struct {
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params,omitempty"`
+}
+type ClientRequest struct {
+	ID     RequestID       `json:"id"`
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Request parameters for closing an active session.
+//
+// If supported, the agent **must** cancel any ongoing work related to the session
+// (treat it as if `session/cancel` was called) and then free up any resources
+// associated with the session.
+//
+// Only available if the Agent supports the `session.close` capability.
+type CloseSessionRequest struct {
+	Meta      map[string]any `json:"_meta,omitempty"`
+	SessionID SessionID      `json:"sessionId"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Response from closing a session.
+type CloseSessionResponse struct {
+	Meta map[string]any `json:"_meta,omitempty"`
 }
 
 // Session configuration options have been updated.
@@ -975,6 +1099,140 @@ type Diff struct {
 	Path    string         `json:"path"`
 }
 
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// User action payload for elicitation responses.
+//
+// The Action field discriminates the response:
+//   - "accept": the user submitted the form; Content holds submitted values.
+//   - "decline": the user chose to decline the elicitation.
+//   - "cancel": the user cancelled (e.g. dismissed the dialog).
+type ElicitationAction struct {
+	Action  string         `json:"action"`
+	Content map[string]any `json:"content,omitempty"`
+}
+
+// IsAccept reports whether the user accepted and submitted the elicitation form.
+func (a ElicitationAction) IsAccept() bool { return a.Action == "accept" }
+
+// IsDecline reports whether the user declined the elicitation.
+func (a ElicitationAction) IsDecline() bool { return a.Action == "decline" }
+
+// IsCancel reports whether the user cancelled the elicitation.
+func (a ElicitationAction) IsCancel() bool { return a.Action == "cancel" }
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Elicitation capabilities supported by the client.
+type ElicitationCapabilities struct {
+	Meta map[string]any               `json:"_meta,omitempty"`
+	Form *ElicitationFormCapabilities `json:"form,omitempty"`
+	URL  *ElicitationURLCapabilities  `json:"url,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Notification sent by the agent when a URL-based elicitation is complete.
+type ElicitationCompleteNotification struct {
+	Meta          map[string]any `json:"_meta,omitempty"`
+	ElicitationID ElicitationID  `json:"elicitationId"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Form-based elicitation capabilities.
+type ElicitationFormCapabilities struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Request from the agent to elicit structured user input.
+type ElicitationRequest struct {
+	Meta            map[string]any     `json:"_meta,omitempty"`
+	ElicitationID   *ElicitationID     `json:"elicitationId,omitempty"`
+	Message         string             `json:"message"`
+	Mode            string             `json:"mode"`
+	RequestedSchema *ElicitationSchema `json:"requestedSchema,omitempty"`
+	SessionID       SessionID          `json:"sessionId"`
+	URL             string             `json:"url,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Response from the client to an elicitation request.
+type ElicitationResponse struct {
+	Meta   map[string]any    `json:"_meta,omitempty"`
+	Action ElicitationAction `json:"action"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// JSON-schema like object used by form mode elicitation.
+type ElicitationSchema struct {
+	Description string                               `json:"description,omitempty"`
+	Properties  map[string]ElicitationPropertySchema `json:"properties,omitempty"`
+	Required    []string                             `json:"required,omitempty"`
+	Title       string                               `json:"title,omitempty"`
+	Type        string                               `json:"type,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Schema for a single property in an elicitation form. The Type field determines which
+// semantic fields are meaningful:
+//   - "string": Format, Pattern, MinLength, MaxLength, Enum, OneOf apply.
+//   - "number" / "integer": Minimum, Maximum apply.
+//   - "boolean": Default (bool) applies.
+//   - "array" (MultiSelect): Items, MinItems, MaxItems apply.
+type ElicitationPropertySchema struct {
+	// Type is the JSON Schema type: "string", "number", "integer", "boolean", or "array".
+	Type        string `json:"type"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Default value encoded as raw JSON (type depends on Type).
+	Default json.RawMessage `json:"default,omitempty"`
+	// string-specific fields.
+	Format    string   `json:"format,omitempty"` // "email"|"uri"|"date"|"date-time"
+	Pattern   string   `json:"pattern,omitempty"`
+	MinLength *int     `json:"minLength,omitempty"`
+	MaxLength *int     `json:"maxLength,omitempty"`
+	Enum      []string `json:"enum,omitempty"`
+	OneOf     []any    `json:"oneOf,omitempty"` // enum option objects for labelled selections
+	// number / integer-specific fields.
+	Minimum *float64 `json:"minimum,omitempty"`
+	Maximum *float64 `json:"maximum,omitempty"`
+	// array (MultiSelect) fields.
+	Items    json.RawMessage `json:"items,omitempty"` // MultiSelectItems (titled or untitled)
+	MinItems *int            `json:"minItems,omitempty"`
+	MaxItems *int            `json:"maxItems,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// URL-based elicitation capabilities.
+type ElicitationURLCapabilities struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
 // The contents of a resource, embedded into a prompt or tool call result.
 type EmbeddedResource struct {
 	Meta        map[string]any           `json:"_meta,omitempty"`
@@ -1008,6 +1266,31 @@ type FileSystemCapabilities struct {
 	Meta          map[string]any `json:"_meta,omitempty"`
 	ReadTextFile  bool           `json:"readTextFile,omitempty"`
 	WriteTextFile bool           `json:"writeTextFile,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Request parameters for forking an existing session.
+type ForkSessionRequest struct {
+	Meta       map[string]any `json:"_meta,omitempty"`
+	Cwd        string         `json:"cwd"`
+	MCPServers []MCPServer    `json:"mcpServers,omitempty"`
+	SessionID  SessionID      `json:"sessionId"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Response from forking an existing session.
+type ForkSessionResponse struct {
+	Meta          map[string]any        `json:"_meta,omitempty"`
+	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
+	Models        *SessionModelState    `json:"models,omitempty"`
+	Modes         *SessionModeState     `json:"modes,omitempty"`
+	SessionID     SessionID             `json:"sessionId"`
 }
 
 // An HTTP header to set when making requests to the MCP server.
@@ -1108,6 +1391,37 @@ type LoadSessionResponse struct {
 	Modes         *SessionModeState     `json:"modes,omitempty"`
 }
 
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Logout capabilities supported by the agent.
+//
+// By supplying `{}` it means that the agent supports the logout method.
+type LogoutCapabilities struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Request parameters for the logout method.
+//
+// Terminates the current authenticated session.
+type LogoutRequest struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Response to the `logout` method.
+type LogoutResponse struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
 // MCP capabilities supported by the agent
 type MCPCapabilities struct {
 	Meta map[string]any `json:"_meta,omitempty"`
@@ -1138,6 +1452,18 @@ type MCPServerStdio struct {
 	Command string         `json:"command"`
 	Env     []EnvVariable  `json:"env"`
 	Name    string         `json:"name"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Information about a selectable model.
+type ModelInfo struct {
+	Meta        map[string]any `json:"_meta,omitempty"`
+	Description string         `json:"description,omitempty"`
+	ModelID     ModelID        `json:"modelId"`
+	Name        string         `json:"name"`
 }
 
 // Request parameters for creating a new session.
@@ -1288,6 +1614,30 @@ type ResourceLink struct {
 	URI         string         `json:"uri"`
 }
 
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Request parameters for resuming an existing session without replaying history.
+type ResumeSessionRequest struct {
+	Meta       map[string]any `json:"_meta,omitempty"`
+	Cwd        string         `json:"cwd"`
+	MCPServers []MCPServer    `json:"mcpServers,omitempty"`
+	SessionID  SessionID      `json:"sessionId"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Response from resuming an existing session.
+type ResumeSessionResponse struct {
+	Meta          map[string]any        `json:"_meta,omitempty"`
+	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
+	Models        *SessionModelState    `json:"models,omitempty"`
+	Modes         *SessionModeState     `json:"modes,omitempty"`
+}
+
 // The user selected one of the provided options.
 type SelectedPermissionOutcome struct {
 	Meta     map[string]any     `json:"_meta,omitempty"`
@@ -1304,17 +1654,69 @@ type SelectedPermissionOutcome struct {
 //
 // See protocol docs: [Session Capabilities](https://agentclientprotocol.com/protocol/initialization#session-capabilities)
 type SessionCapabilities struct {
-	Meta map[string]any           `json:"_meta,omitempty"`
-	List *SessionListCapabilities `json:"list,omitempty"`
+	Meta   map[string]any             `json:"_meta,omitempty"`
+	Close  *SessionCloseCapabilities  `json:"close,omitempty"`
+	Fork   *SessionForkCapabilities   `json:"fork,omitempty"`
+	List   *SessionListCapabilities   `json:"list,omitempty"`
+	Resume *SessionResumeCapabilities `json:"resume,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Capabilities for the `session/close` method.
+//
+// By supplying `{}` it means that the agent supports closing of sessions.
+type SessionCloseCapabilities struct {
+	Meta map[string]any `json:"_meta,omitempty"`
 }
 
 // A session configuration option selector and its current state.
+//
+// The Type field discriminates between variants:
+//   - "select": a dropdown selector; use AsSelectOption() to extract the typed value.
+//   - "boolean": an on/off toggle; use AsBoolOption() to extract the typed value.
+//
+// CurrentValue holds the current value as raw JSON (a string for select, a bool for boolean).
+// Options holds the available choices for select options.
 type SessionConfigOption struct {
 	Meta        map[string]any               `json:"_meta,omitempty"`
 	Category    *SessionConfigOptionCategory `json:"category,omitempty"`
 	Description string                       `json:"description,omitempty"`
 	ID          SessionConfigID              `json:"id"`
 	Name        string                       `json:"name"`
+	// Type is the discriminator: "select" or "boolean".
+	Type string `json:"type,omitempty"`
+	// CurrentValue is the current option value encoded as JSON.
+	// For select options it is a JSON string; for boolean options it is a JSON boolean.
+	CurrentValue json.RawMessage `json:"currentValue,omitempty"`
+	// Options holds the available choices for select options (Type == "select").
+	Options SessionConfigSelectOptions `json:"options,omitempty"`
+}
+
+// AsSelectOption returns the typed SessionConfigSelect value if Type == "select".
+func (o *SessionConfigOption) AsSelectOption() (SessionConfigSelect, bool) {
+	if o.Type != "select" {
+		return SessionConfigSelect{}, false
+	}
+	var cv SessionConfigValueID
+	if err := json.Unmarshal(o.CurrentValue, &cv); err != nil {
+		return SessionConfigSelect{}, false
+	}
+	return SessionConfigSelect{CurrentValue: cv, Options: o.Options}, true
+}
+
+// AsBoolOption returns the typed SessionConfigBoolean value if Type == "boolean".
+func (o *SessionConfigOption) AsBoolOption() (SessionConfigBoolean, bool) {
+	if o.Type != "boolean" {
+		return SessionConfigBoolean{}, false
+	}
+	var cv bool
+	if err := json.Unmarshal(o.CurrentValue, &cv); err != nil {
+		return SessionConfigBoolean{}, false
+	}
+	return SessionConfigBoolean{CurrentValue: cv}, true
 }
 
 // A single-value selector (dropdown) session configuration option payload.
@@ -1337,6 +1739,17 @@ type SessionConfigSelectOption struct {
 	Description string               `json:"description,omitempty"`
 	Name        string               `json:"name"`
 	Value       SessionConfigValueID `json:"value"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Capabilities for the `session/fork` method.
+//
+// By supplying `{}` it means that the agent supports forking of sessions.
+type SessionForkCapabilities struct {
+	Meta map[string]any `json:"_meta,omitempty"`
 }
 
 // Information about a session returned by session/list
@@ -1382,6 +1795,17 @@ type SessionModeState struct {
 	CurrentModeID  SessionModeID  `json:"currentModeId"`
 }
 
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// The set of models and the one currently active.
+type SessionModelState struct {
+	Meta            map[string]any `json:"_meta,omitempty"`
+	AvailableModels []ModelInfo    `json:"availableModels"`
+	CurrentModelID  ModelID        `json:"currentModelId"`
+}
+
 // Notification containing a session update from the agent.
 //
 // Used to stream real-time progress and results during prompt processing.
@@ -1393,12 +1817,55 @@ type SessionNotification struct {
 	Update    SessionUpdate  `json:"update"`
 }
 
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Capabilities for the `session/resume` method.
+//
+// By supplying `{}` it means that the agent supports resuming of sessions.
+type SessionResumeCapabilities struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
 // Request parameters for setting a session configuration option.
+//
+// Value holds either a SessionConfigValueID string (for select options) or a boolean
+// (for boolean options). When setting a boolean option, set Type to "boolean" and
+// encode the value as JSON. Use the BoolValue/IDValue helper methods to read the value,
+// and use NewSetConfigIDValue/NewSetConfigBoolValue to construct the request.
 type SetSessionConfigOptionRequest struct {
-	Meta      map[string]any       `json:"_meta,omitempty"`
-	ConfigID  SessionConfigID      `json:"configId"`
-	SessionID SessionID            `json:"sessionId"`
-	Value     SessionConfigValueID `json:"value"`
+	Meta      map[string]any  `json:"_meta,omitempty"`
+	ConfigID  SessionConfigID `json:"configId"`
+	SessionID SessionID       `json:"sessionId"`
+	// Type is "boolean" when setting a boolean config option; empty otherwise.
+	Type string `json:"type,omitempty"`
+	// Value is a JSON-encoded SessionConfigValueID (string) or boolean.
+	Value json.RawMessage `json:"value"`
+}
+
+// BoolValue returns the boolean value if Type == "boolean", otherwise returns (false, false).
+func (r *SetSessionConfigOptionRequest) BoolValue() (bool, bool) {
+	if r.Type != "boolean" {
+		return false, false
+	}
+	var v bool
+	if err := json.Unmarshal(r.Value, &v); err != nil {
+		return false, false
+	}
+	return v, true
+}
+
+// IDValue returns the SessionConfigValueID if Type != "boolean", otherwise returns ("", false).
+func (r *SetSessionConfigOptionRequest) IDValue() (SessionConfigValueID, bool) {
+	if r.Type == "boolean" {
+		return "", false
+	}
+	var v SessionConfigValueID
+	if err := json.Unmarshal(r.Value, &v); err != nil {
+		return "", false
+	}
+	return v, true
 }
 
 // Response to `session/set_config_option` method.
@@ -1416,6 +1883,26 @@ type SetSessionModeRequest struct {
 
 // Response to `session/set_mode` method.
 type SetSessionModeResponse struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Request parameters for setting a session model.
+type SetSessionModelRequest struct {
+	Meta      map[string]any `json:"_meta,omitempty"`
+	ModelID   ModelID        `json:"modelId"`
+	SessionID SessionID      `json:"sessionId"`
+}
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Response to `session/set_model` method.
+type SetSessionModelResponse struct {
 	Meta map[string]any `json:"_meta,omitempty"`
 }
 
@@ -1549,6 +2036,20 @@ type WriteTextFileResponse struct {
 	Meta map[string]any `json:"_meta,omitempty"`
 }
 
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// Unique identifier for an elicitation.
+type ElicitationID string
+
+// **UNSTABLE**
+//
+// This capability is not part of the spec yet, and may be removed or changed at any point.
+//
+// A unique identifier for a model.
+type ModelID string
+
 // Unique identifier for a permission option.
 type PermissionOptionID string
 
@@ -1592,11 +2093,65 @@ type SessionModeID string
 // Unique identifier for a tool call within a session.
 type ToolCallID string
 
-// Describes an available authentication method.
+// AuthMethod describes an available authentication method.
 //
-// The `type` field acts as the discriminator in the serialized JSON form.
-// When no `type` is present, the method is treated as `agent`.
-type AuthMethod = AuthMethodAgent
+// The Type field is the discriminator:
+//   - "" or "agent": agent-handled authentication (default).
+//   - "env_var": the agent provides env-var credential fields (unstable).
+//   - "terminal": the agent runs an interactive terminal for auth (unstable).
+//
+// Fields specific to env_var: Link, Vars.
+// Fields specific to terminal: Args, Env.
+// Common fields: ID, Name, Description.
+//
+// See protocol docs: [Authentication](https://agentclientprotocol.com/protocol/authentication)
+type AuthMethod struct {
+	Meta        map[string]any `json:"_meta,omitempty"`
+	Description string         `json:"description,omitempty"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	// Type is the auth method discriminator. Empty / "agent" means agent-handled.
+	Type string `json:"type,omitempty"`
+	// env_var-specific fields (Type == "env_var").
+	Link string       `json:"link,omitempty"`
+	Vars []AuthEnvVar `json:"vars,omitempty"`
+	// terminal-specific fields (Type == "terminal").
+	Args []string          `json:"args,omitempty"`
+	Env  map[string]string `json:"env,omitempty"`
+}
+
+// IsAgent reports whether this auth method is agent-handled.
+func (a AuthMethod) IsAgent() bool { return a.Type == "" || a.Type == "agent" }
+
+// IsEnvVar reports whether this auth method uses env-var credentials.
+func (a AuthMethod) IsEnvVar() bool { return a.Type == "env_var" }
+
+// IsTerminal reports whether this auth method uses an interactive terminal.
+func (a AuthMethod) IsTerminal() bool { return a.Type == "terminal" }
+
+// AsAgent returns the AuthMethodAgent representation if the type is agent (or empty).
+func (a AuthMethod) AsAgent() (AuthMethodAgent, bool) {
+	if a.Type != "" && a.Type != "agent" {
+		return AuthMethodAgent{}, false
+	}
+	return AuthMethodAgent{Meta: a.Meta, ID: a.ID, Name: a.Name, Description: a.Description}, true
+}
+
+// AsEnvVar returns the AuthMethodEnvVar representation if the type is "env_var".
+func (a AuthMethod) AsEnvVar() (AuthMethodEnvVar, bool) {
+	if a.Type != "env_var" {
+		return AuthMethodEnvVar{}, false
+	}
+	return AuthMethodEnvVar{Meta: a.Meta, ID: a.ID, Name: a.Name, Description: a.Description, Link: a.Link, Vars: a.Vars}, true
+}
+
+// AsTerminal returns the AuthMethodTerminal representation if the type is "terminal".
+func (a AuthMethod) AsTerminal() (AuthMethodTerminal, bool) {
+	if a.Type != "terminal" {
+		return AuthMethodTerminal{}, false
+	}
+	return AuthMethodTerminal{Meta: a.Meta, ID: a.ID, Name: a.Name, Description: a.Description, Args: a.Args, Env: a.Env}, true
+}
 
 // The input specification for a command.
 type AvailableCommandInput = UnstructuredCommandInput
@@ -1613,24 +2168,31 @@ const (
 var AgentMethods = struct {
 	Authenticate           string
 	Initialize             string
+	Logout                 string
 	SessionCancel          string
+	SessionClose           string
+	SessionFork            string
 	SessionList            string
 	SessionLoad            string
 	SessionNew             string
 	SessionPrompt          string
+	SessionResume          string
 	SessionSetConfigOption string
 	SessionSetMode         string
-}{Authenticate: "authenticate", Initialize: "initialize", SessionCancel: "session/cancel", SessionList: "session/list", SessionLoad: "session/load", SessionNew: "session/new", SessionPrompt: "session/prompt", SessionSetConfigOption: "session/set_config_option", SessionSetMode: "session/set_mode"}
+	SessionSetModel        string
+}{Authenticate: "authenticate", Initialize: "initialize", Logout: "logout", SessionCancel: "session/cancel", SessionClose: "session/close", SessionFork: "session/fork", SessionList: "session/list", SessionLoad: "session/load", SessionNew: "session/new", SessionPrompt: "session/prompt", SessionResume: "session/resume", SessionSetConfigOption: "session/set_config_option", SessionSetMode: "session/set_mode", SessionSetModel: "session/set_model"}
 
 // Client method names (unstable)
 var ClientMethods = struct {
-	FSReadTextFile           string
-	FSWriteTextFile          string
-	SessionRequestPermission string
-	SessionUpdate            string
-	TerminalCreate           string
-	TerminalKill             string
-	TerminalOutput           string
-	TerminalRelease          string
-	TerminalWaitForExit      string
-}{FSReadTextFile: "fs/read_text_file", FSWriteTextFile: "fs/write_text_file", SessionRequestPermission: "session/request_permission", SessionUpdate: "session/update", TerminalCreate: "terminal/create", TerminalKill: "terminal/kill", TerminalOutput: "terminal/output", TerminalRelease: "terminal/release", TerminalWaitForExit: "terminal/wait_for_exit"}
+	FSReadTextFile             string
+	FSWriteTextFile            string
+	SessionElicitation         string
+	SessionElicitationComplete string
+	SessionRequestPermission   string
+	SessionUpdate              string
+	TerminalCreate             string
+	TerminalKill               string
+	TerminalOutput             string
+	TerminalRelease            string
+	TerminalWaitForExit        string
+}{FSReadTextFile: "fs/read_text_file", FSWriteTextFile: "fs/write_text_file", SessionElicitation: "session/elicitation", SessionElicitationComplete: "session/elicitation/complete", SessionRequestPermission: "session/request_permission", SessionUpdate: "session/update", TerminalCreate: "terminal/create", TerminalKill: "terminal/kill", TerminalOutput: "terminal/output", TerminalRelease: "terminal/release", TerminalWaitForExit: "terminal/wait_for_exit"}

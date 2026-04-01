@@ -34,6 +34,7 @@ type Generator struct {
 	builder          *astgen.FileBuilder
 	generatedCode    []byte
 	skippedItems     []string
+	excludedItems    []string
 	excludedDefNames map[string]bool // definitions to exclude (from base schema)
 }
 
@@ -101,6 +102,10 @@ func (g *Generator) Generate() error {
 	definitions := jsondef.GetDefinitions(g.schema)
 
 	for _, definition := range definitions {
+		if g.isTypeExcluded(definition.Name) {
+			g.addExcludedItem(definition.Name)
+			continue
+		}
 		if g.isTypeIgnored(definition.Name) {
 			g.addSkippedItem(definition.Name)
 			continue
@@ -117,11 +122,6 @@ func (g *Generator) Generate() error {
 			}
 			return fmt.Errorf("failed to generate definition %s: %w", definition.Name, err)
 		}
-	}
-
-	if len(g.skippedItems) > 0 {
-		fmt.Printf("Successfully generated types, skipped %d definitions: %v\n",
-			len(g.skippedItems), g.skippedItems)
 	}
 
 	// Generate constants from metadata
@@ -173,8 +173,22 @@ func (g *Generator) GetSkippedItems() []string {
 	return g.skippedItems
 }
 
+// GetExcludedCount returns the number of definitions excluded by excludeFrom.
+func (g *Generator) GetExcludedCount() int {
+	return len(g.excludedItems)
+}
+
+// GetExcludedItems returns the list of definitions excluded by excludeFrom.
+func (g *Generator) GetExcludedItems() []string {
+	return g.excludedItems
+}
+
 // generateDefinition generates code for a single definition.
 func (g *Generator) generateDefinition(def jsondef.Definition) error {
+	if isJSONRPCResponseEnvelope(def.Schema) {
+		return g.generateJSONRPCResponseEnvelope(def.Name, def.GetDescription())
+	}
+
 	switch def.Type {
 	case jsondef.Primitive:
 		return g.generatePrimitive(def)
@@ -190,8 +204,60 @@ func (g *Generator) generateDefinition(def jsondef.Definition) error {
 	case jsondef.Union:
 		return g.generateUnion(def)
 	default:
+		if isOpaqueUnknownDefinition(def.Schema) {
+			comment := def.GetDescription()
+			g.builder.AddDecl(astgen.TypeDef(def.Name, "any", comment))
+			return nil
+		}
 		return fmt.Errorf("unsupported definition type: %s", def.Type)
 	}
+}
+
+func (g *Generator) generateJSONRPCResponseEnvelope(name string, comment string) error {
+	g.builder.AddImport("encoding/json")
+	g.builder.AddDecl(astgen.StructDef(name, []astgen.StructField{
+		{
+			Name: "ID",
+			Type: astgen.TypeExpr("RequestID"),
+			Tag:  `json:"id"`,
+		},
+		{
+			Name: "Result",
+			Type: astgen.TypeExpr(JSONRawMessageType),
+			Tag:  `json:"result,omitempty"`,
+		},
+		{
+			Name: "Error",
+			Type: astgen.TypeExpr("*Error"),
+			Tag:  `json:"error,omitempty"`,
+		},
+	}, comment))
+	return nil
+}
+
+func isJSONRPCResponseEnvelope(schema *jsondef.Schema) bool {
+	if schema == nil || len(schema.AnyOf) < 2 {
+		return false
+	}
+
+	hasResultVariant := false
+	hasErrorVariant := false
+	for _, variant := range schema.AnyOf {
+		if variant == nil || len(variant.Type) == 0 || !variant.Type.Contains("object") || variant.Properties == nil {
+			continue
+		}
+		_, hasID := variant.Properties["id"]
+		_, hasResult := variant.Properties["result"]
+		_, hasError := variant.Properties["error"]
+		if hasID && hasResult {
+			hasResultVariant = true
+		}
+		if hasID && hasError {
+			hasErrorVariant = true
+		}
+	}
+
+	return hasResultVariant && hasErrorVariant
 }
 
 // generatePrimitive generates a primitive type definition.
@@ -423,6 +489,10 @@ func (g *Generator) buildStructField(propName string, propSchema *jsondef.Schema
 		if isOptional && !strings.HasPrefix(fieldType, "*") {
 			fieldType = "*" + fieldType
 		}
+	case jsondef.Union, jsondef.ComplexStruct:
+		// Preserve unresolved union-shaped payloads rather than failing the entire parent struct.
+		fieldType = JSONRawMessageType
+		g.builder.AddImport("encoding/json")
 	default:
 		// No type info → json.RawMessage
 		if isNoTypeSchema(propSchema) {
@@ -456,6 +526,22 @@ func isNoTypeSchema(schema *jsondef.Schema) bool {
 		schema.Properties == nil &&
 		schema.AnyOf == nil &&
 		schema.OneOf == nil
+}
+
+func isOpaqueUnknownDefinition(schema *jsondef.Schema) bool {
+	if schema == nil {
+		return false
+	}
+	return len(schema.Type) == 0 &&
+		schema.Ref == "" &&
+		schema.Properties == nil &&
+		schema.AnyOf == nil &&
+		schema.OneOf == nil &&
+		schema.AllOf == nil &&
+		schema.Items == nil &&
+		schema.AdditionalProperties == nil &&
+		len(schema.Enum) == 0 &&
+		schema.Const == nil
 }
 
 // generateTypeAlias generates a type alias for single reference types.
@@ -955,16 +1041,17 @@ func formatFieldName(key string) string {
 }
 
 func (g *Generator) isTypeIgnored(typeName string) bool {
-	if slices.Contains(g.config.IgnoreTypes, typeName) {
-		return true
-	}
-	if g.excludedDefNames[typeName] {
-		return true
-	}
-	return false
+	return slices.Contains(g.config.IgnoreTypes, typeName)
+}
+
+func (g *Generator) isTypeExcluded(typeName string) bool {
+	return g.excludedDefNames[typeName]
 }
 
 func (g *Generator) addSkippedItem(name string) {
 	g.skippedItems = append(g.skippedItems, name)
 }
 
+func (g *Generator) addExcludedItem(name string) {
+	g.excludedItems = append(g.excludedItems, name)
+}

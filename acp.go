@@ -18,10 +18,11 @@ import (
 //   - [SessionLister] for custom session/list handling
 //
 // Other optional capabilities:
-//   - [SessionForker] for session/fork (unstable)
-//   - [SessionResumer] for session/resume (unstable)
-//   - [SessionCloser] for session/close (unstable)
-//   - [ModelSetter] for session/set_model (unstable)
+//   - [SessionForker] for session/fork
+//   - [SessionResumer] for session/resume
+//   - [SessionCloser] for session/close
+//   - [ModelSetter] for session/set_model
+//   - [SessionLogouter] for logout (unstable)
 //   - [ExtMethodHandler] for custom extension methods
 //   - [ExtNotificationHandler] for custom extension notifications
 //
@@ -91,32 +92,39 @@ type SessionLister interface {
 	ListSessions(ctx context.Context, params *ListSessionsRequest) (*ListSessionsResponse, error)
 }
 
-// SessionForker is an optional interface for agents that support session forking (unstable).
+// SessionForker is an optional interface for agents that support session forking.
 //
 // Implement this interface to allow clients to fork sessions.
 type SessionForker interface {
 	ForkSession(ctx context.Context, params *ForkSessionRequest) (*ForkSessionResponse, error)
 }
 
-// SessionResumer is an optional interface for agents that support session resuming (unstable).
+// SessionResumer is an optional interface for agents that support session resuming.
 //
 // Implement this interface to allow clients to resume sessions without replaying history.
 type SessionResumer interface {
 	ResumeSession(ctx context.Context, params *ResumeSessionRequest) (*ResumeSessionResponse, error)
 }
 
-// SessionCloser is an optional interface for agents that support session closing (unstable).
+// SessionCloser is an optional interface for agents that support session closing.
 //
 // Implement this interface to allow clients to explicitly close sessions.
 type SessionCloser interface {
 	CloseSession(ctx context.Context, params *CloseSessionRequest) (*CloseSessionResponse, error)
 }
 
-// ModelSetter is an optional interface for agents that support model selection (unstable).
+// ModelSetter is an optional interface for agents that support model selection.
 //
 // Implement this interface to allow clients to change the model during a session.
 type ModelSetter interface {
 	SetSessionModel(ctx context.Context, params *SetSessionModelRequest) (*SetSessionModelResponse, error)
+}
+
+// SessionLogouter is an optional interface for agents that support logout (unstable).
+//
+// Implement this interface to allow clients to reset authenticated state.
+type SessionLogouter interface {
+	Logout(ctx context.Context, params *LogoutRequest) (*LogoutResponse, error)
 }
 
 // ExtMethodHandler is an optional interface for handling custom extension methods.
@@ -187,4 +195,17 @@ type Client interface {
 
 	// KillTerminalCommand kills a terminal command without releasing the terminal.
 	KillTerminalCommand(ctx context.Context, params *KillTerminalRequest) (*KillTerminalResponse, error)
+}
+
+// ElicitationHandler is an optional interface for clients that support session/elicitation (unstable).
+//
+// Implement this interface to allow agents to request structured user input.
+type ElicitationHandler interface {
+	Elicitation(ctx context.Context, params *ElicitationRequest) (*ElicitationResponse, error)
+}
+
+// ElicitationCompleteHandler is an optional interface for clients that support
+// session/elicitation/complete (unstable).
+type ElicitationCompleteHandler interface {
+	ElicitationComplete(ctx context.Context, params *ElicitationCompleteNotification) error
 }

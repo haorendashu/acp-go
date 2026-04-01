@@ -117,6 +117,11 @@ func (s *SessionStream) SendCommands(ctx context.Context, commands []AvailableCo
 	return s.send(ctx, NewSessionUpdateAvailableCommandsUpdate(commands))
 }
 
+// SendUsageUpdate sends a context window and cost update.
+func (s *SessionStream) SendUsageUpdate(ctx context.Context, update UsageUpdate) error {
+	return s.send(ctx, NewSessionUpdateUsageUpdate(update))
+}
+
 // SendUpdate sends an arbitrary SessionUpdate (escape hatch for custom updates).
 func (s *SessionStream) SendUpdate(ctx context.Context, update SessionUpdate) error {
 	return s.send(ctx, update)

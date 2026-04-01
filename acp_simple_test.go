@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -335,5 +336,217 @@ func TestInitializeResponse(t *testing.T) {
 		if authMethod.Description != "OAuth 2.0 authentication" {
 			t.Errorf("Expected auth method description 'OAuth 2.0 authentication', got '%s'", authMethod.Description)
 		}
+	}
+}
+
+func TestAgentResponseEnvelopeJSON(t *testing.T) {
+	resp := AgentResponse{
+		ID:     RequestID("1"),
+		Result: json.RawMessage(`{"ok":true}`),
+	}
+
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if _, ok := decoded["id"]; !ok {
+		t.Fatal("expected id field in agent response envelope")
+	}
+	if _, ok := decoded["result"]; !ok {
+		t.Fatal("expected result field in agent response envelope")
+	}
+}
+
+func TestClientResponseEnvelopeErrorJSON(t *testing.T) {
+	resp := ClientResponse{
+		ID: RequestID("2"),
+		Error: &Error{
+			Code:    ErrorCodeMethodNotFound,
+			Message: "method not found",
+		},
+	}
+
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	errObj, ok := decoded["error"].(map[string]any)
+	if !ok {
+		t.Fatal("expected error field in client response envelope")
+	}
+	if errObj["message"] != "method not found" {
+		t.Fatalf("expected error message 'method not found', got %v", errObj["message"])
+	}
+}
+
+func TestInitializeRequest_ClientCapabilitiesIncludeAuthAndElicitation(t *testing.T) {
+	req := &InitializeRequest{
+		ProtocolVersion: ProtocolVersion(1),
+		ClientCapabilities: &ClientCapabilities{
+			Auth: &AuthCapabilities{Terminal: true},
+			Elicitation: &ElicitationCapabilities{
+				Form: &ElicitationFormCapabilities{},
+				URL:  &ElicitationURLCapabilities{},
+			},
+		},
+	}
+
+	b, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	cc, ok := decoded["clientCapabilities"].(map[string]any)
+	if !ok {
+		t.Fatal("clientCapabilities missing from serialized initialize request")
+	}
+	if _, ok := cc["auth"]; !ok {
+		t.Fatal("expected auth capability in serialized initialize request")
+	}
+	if _, ok := cc["elicitation"]; !ok {
+		t.Fatal("expected elicitation capability in serialized initialize request")
+	}
+}
+
+func TestInitializeResponse_AgentCapabilitiesIncludeLogout(t *testing.T) {
+	resp := &InitializeResponse{
+		ProtocolVersion: ProtocolVersion(1),
+		AgentCapabilities: &AgentCapabilities{
+			Auth: &AgentAuthCapabilities{Logout: &LogoutCapabilities{}},
+		},
+	}
+
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	ac, ok := decoded["agentCapabilities"].(map[string]any)
+	if !ok {
+		t.Fatal("agentCapabilities missing from serialized initialize response")
+	}
+	auth, ok := ac["auth"].(map[string]any)
+	if !ok {
+		t.Fatal("expected auth capability in serialized initialize response")
+	}
+	if _, ok := auth["logout"]; !ok {
+		t.Fatal("expected logout capability in serialized initialize response")
+	}
+}
+
+func TestGeneratedLogoutAndElicitationSimpleTypesJSON(t *testing.T) {
+	logoutReq := LogoutRequest{}
+	logoutResp := LogoutResponse{}
+	notification := ElicitationCompleteNotification{ElicitationID: ElicitationID("elic-1")}
+
+	for name, value := range map[string]any{
+		"logout request":           logoutReq,
+		"logout response":          logoutResp,
+		"elicitation notification": notification,
+	} {
+		if _, err := json.Marshal(value); err != nil {
+			t.Fatalf("marshal %s failed: %v", name, err)
+		}
+	}
+
+	b, err := json.Marshal(notification)
+	if err != nil {
+		t.Fatalf("marshal elicitation notification failed: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal elicitation notification failed: %v", err)
+	}
+
+	if decoded["elicitationId"] != "elic-1" {
+		t.Fatalf("expected elicitationId 'elic-1', got %v", decoded["elicitationId"])
+	}
+}
+
+func TestInitializeResponse_AgentCapabilitiesIncludeStableSessionLifecycleOptions(t *testing.T) {
+	resp := &InitializeResponse{
+		ProtocolVersion: ProtocolVersion(1),
+		AgentCapabilities: &AgentCapabilities{
+			SessionCapabilities: &SessionCapabilities{
+				Close:  &SessionCloseCapabilities{},
+				Fork:   &SessionForkCapabilities{},
+				Resume: &SessionResumeCapabilities{},
+			},
+		},
+	}
+
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	ac, ok := decoded["agentCapabilities"].(map[string]any)
+	if !ok {
+		t.Fatal("agentCapabilities missing from serialized initialize response")
+	}
+	sc, ok := ac["sessionCapabilities"].(map[string]any)
+	if !ok {
+		t.Fatal("expected sessionCapabilities in serialized initialize response")
+	}
+	if _, ok := sc["close"]; !ok {
+		t.Fatal("expected close capability in serialized initialize response")
+	}
+	if _, ok := sc["fork"]; !ok {
+		t.Fatal("expected fork capability in serialized initialize response")
+	}
+	if _, ok := sc["resume"]; !ok {
+		t.Fatal("expected resume capability in serialized initialize response")
+	}
+}
+
+func TestSetSessionModelRequestJSON(t *testing.T) {
+	req := SetSessionModelRequest{
+		SessionID: SessionID("session-1"),
+		ModelID:   ModelID("model-1"),
+	}
+
+	b, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if decoded["sessionId"] != "session-1" {
+		t.Fatalf("expected sessionId 'session-1', got %v", decoded["sessionId"])
+	}
+	if decoded["modelId"] != "model-1" {
+		t.Fatalf("expected modelId 'model-1', got %v", decoded["modelId"])
 	}
 }

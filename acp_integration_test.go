@@ -40,10 +40,12 @@ func (tc *TestConnection) Close() {
 
 // TestClient implements Client interface for integration testing
 type TestClient struct {
-	writeTextFileHandler     func(*WriteTextFileRequest) (*WriteTextFileResponse, error)
-	readTextFileHandler      func(*ReadTextFileRequest) (*ReadTextFileResponse, error)
-	requestPermissionHandler func(*RequestPermissionRequest) (*RequestPermissionResponse, error)
-	sessionUpdateHandler     func(*SessionNotification) error
+	writeTextFileHandler       func(*WriteTextFileRequest) (*WriteTextFileResponse, error)
+	readTextFileHandler        func(*ReadTextFileRequest) (*ReadTextFileResponse, error)
+	requestPermissionHandler   func(*RequestPermissionRequest) (*RequestPermissionResponse, error)
+	sessionUpdateHandler       func(*SessionNotification) error
+	elicitationHandler         func(*ElicitationRequest) (*ElicitationResponse, error)
+	elicitationCompleteHandler func(*ElicitationCompleteNotification) error
 }
 
 func (c *TestClient) WriteTextFile(ctx context.Context, params *WriteTextFileRequest) (*WriteTextFileResponse, error) {
@@ -97,17 +99,32 @@ func (c *TestClient) KillTerminalCommand(ctx context.Context, params *KillTermin
 	return &KillTerminalResponse{}, nil
 }
 
+func (c *TestClient) Elicitation(ctx context.Context, params *ElicitationRequest) (*ElicitationResponse, error) {
+	if c.elicitationHandler != nil {
+		return c.elicitationHandler(params)
+	}
+	return &ElicitationResponse{Action: ElicitationAction{Action: "cancel"}}, nil
+}
+
+func (c *TestClient) ElicitationComplete(ctx context.Context, params *ElicitationCompleteNotification) error {
+	if c.elicitationCompleteHandler != nil {
+		return c.elicitationCompleteHandler(params)
+	}
+	return nil
+}
+
 // TestAgent implements Agent interface for integration testing
 type TestAgent struct {
-	initializeHandler          func(*InitializeRequest) (*InitializeResponse, error)
-	newSessionHandler          func(*NewSessionRequest) (*NewSessionResponse, error)
-	loadSessionHandler         func(*LoadSessionRequest) (*LoadSessionResponse, error)
-	listSessionsHandler        func(*ListSessionsRequest) (*ListSessionsResponse, error)
-	setSessionModeHandler      func(*SetSessionModeRequest) (*SetSessionModeResponse, error)
-	setSessionConfigHandler    func(*SetSessionConfigOptionRequest) (*SetSessionConfigOptionResponse, error)
-	authenticateHandler        func(*AuthenticateRequest) (*AuthenticateResponse, error)
-	promptHandler              func(*PromptRequest) (*PromptResponse, error)
-	cancelHandler              func(*CancelNotification) error
+	initializeHandler       func(*InitializeRequest) (*InitializeResponse, error)
+	newSessionHandler       func(*NewSessionRequest) (*NewSessionResponse, error)
+	loadSessionHandler      func(*LoadSessionRequest) (*LoadSessionResponse, error)
+	listSessionsHandler     func(*ListSessionsRequest) (*ListSessionsResponse, error)
+	setSessionModeHandler   func(*SetSessionModeRequest) (*SetSessionModeResponse, error)
+	setSessionConfigHandler func(*SetSessionConfigOptionRequest) (*SetSessionConfigOptionResponse, error)
+	authenticateHandler     func(*AuthenticateRequest) (*AuthenticateResponse, error)
+	logoutHandler           func(*LogoutRequest) (*LogoutResponse, error)
+	promptHandler           func(*PromptRequest) (*PromptResponse, error)
+	cancelHandler           func(*CancelNotification) error
 }
 
 func (a *TestAgent) Initialize(ctx context.Context, params *InitializeRequest) (*InitializeResponse, error) {
@@ -161,6 +178,13 @@ func (a *TestAgent) Authenticate(ctx context.Context, params *AuthenticateReques
 		return a.authenticateHandler(params)
 	}
 	return &AuthenticateResponse{}, nil
+}
+
+func (a *TestAgent) Logout(ctx context.Context, params *LogoutRequest) (*LogoutResponse, error) {
+	if a.logoutHandler != nil {
+		return a.logoutHandler(params)
+	}
+	return &LogoutResponse{}, nil
 }
 
 func (a *TestAgent) Prompt(ctx context.Context, params *PromptRequest) (*PromptResponse, error) {
@@ -358,6 +382,94 @@ func TestConcurrentRequests(t *testing.T) {
 	finalCount := atomic.LoadInt64(&requestCount)
 	if finalCount != 3 {
 		t.Errorf("Expected 3 requests, got %d", finalCount)
+	}
+}
+
+func TestUnstableLogoutRoundTrip(t *testing.T) {
+	conn := NewTestConnection()
+	defer conn.Close()
+
+	var called atomic.Bool
+	testAgent := &TestAgent{
+		logoutHandler: func(*LogoutRequest) (*LogoutResponse, error) {
+			called.Store(true)
+			return &LogoutResponse{}, nil
+		},
+	}
+	testClient := &TestClient{}
+
+	agentConnection := NewClientSideConnection(testClient, conn.agentWriter, conn.agentToClient)
+	clientConnection := NewAgentSideConnection(testAgent, conn.clientToAgent, conn.clientWriter)
+
+	ctx := context.Background()
+	go func() { _ = agentConnection.Start(ctx) }()
+	go func() { _ = clientConnection.Start(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+
+	_, err := agentConnection.Logout(ctx, &LogoutRequest{})
+	if err != nil {
+		t.Fatalf("Logout failed: %v", err)
+	}
+	if !called.Load() {
+		t.Fatal("expected logout handler to be called")
+	}
+}
+
+func TestUnstableElicitationRoundTrip(t *testing.T) {
+	conn := NewTestConnection()
+	defer conn.Close()
+
+	elicitationDone := make(chan struct{}, 1)
+	completeDone := make(chan struct{}, 1)
+
+	testClient := &TestClient{
+		elicitationHandler: func(req *ElicitationRequest) (*ElicitationResponse, error) {
+			if req.Mode != "url" {
+				t.Fatalf("expected mode url, got %s", req.Mode)
+			}
+			elicitationDone <- struct{}{}
+			return &ElicitationResponse{Action: ElicitationAction{Action: "accept"}}, nil
+		},
+		elicitationCompleteHandler: func(*ElicitationCompleteNotification) error {
+			completeDone <- struct{}{}
+			return nil
+		},
+	}
+	testAgent := &TestAgent{}
+
+	agentConnection := NewClientSideConnection(testClient, conn.agentWriter, conn.agentToClient)
+	clientConnection := NewAgentSideConnection(testAgent, conn.clientToAgent, conn.clientWriter)
+
+	ctx := context.Background()
+	go func() { _ = agentConnection.Start(ctx) }()
+	go func() { _ = clientConnection.Start(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+
+	_, err := clientConnection.Elicitation(ctx, &ElicitationRequest{
+		Mode:      "url",
+		Message:   "Authorize this action",
+		SessionID: SessionID("s-1"),
+		URL:       "https://example.com/auth",
+	})
+	if err != nil {
+		t.Fatalf("Elicitation failed: %v", err)
+	}
+
+	err = clientConnection.ElicitationComplete(ctx, &ElicitationCompleteNotification{ElicitationID: ElicitationID("e-1")})
+	if err != nil {
+		t.Fatalf("ElicitationComplete failed: %v", err)
+	}
+
+	select {
+	case <-elicitationDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected elicitation handler to be called")
+	}
+
+	select {
+	case <-completeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected elicitation complete handler to be called")
 	}
 }
 

@@ -10,12 +10,12 @@ import (
 
 func main() {
 	app := &cli.Command{
-		Name:      "schema-gen",
-		Usage:     "Generate Go types from JSON schema",
-		Version:   "1.0.0",
+		Name:    "schema-gen",
+		Usage:   "Generate Go types from JSON schema",
+		Version: "1.0.0",
 		// Authors field removed in v3
 		Copyright: "MIT License",
-		
+
 		Commands: []*cli.Command{
 			{
 				Name:    "generate",
@@ -39,9 +39,9 @@ func main() {
 						Value:   "main",
 					},
 					&cli.BoolFlag{
-						Name:    "ignore-errors",
-						Usage:   "Skip definitions that cause generation errors",
-						Value:   false,
+						Name:  "ignore-errors",
+						Usage: "Skip definitions that cause generation errors",
+						Value: false,
 					},
 					&cli.StringFlag{
 						Name:    "meta",
@@ -49,8 +49,8 @@ func main() {
 						Usage:   "Meta JSON file for generating constants and marking internal types",
 					},
 					&cli.StringSliceFlag{
-						Name:    "ignore-types",
-						Usage:   "Comma-separated list of type names to ignore during generation",
+						Name:  "ignore-types",
+						Usage: "Comma-separated list of type names to ignore during generation",
 					},
 					&cli.StringFlag{
 						Name:    "config",
@@ -75,14 +75,13 @@ func main() {
 				Action: validateAction,
 			},
 		},
-		
-		
+
 		OnUsageError: func(ctx context.Context, cmd *cli.Command, err error, isSubcommand bool) error {
 			// Don't print anything for nil errors
 			if err == nil {
 				return nil
 			}
-			
+
 			if appErr, ok := err.(*AppError); ok {
 				fmt.Fprintf(os.Stderr, "Error: %s\n", appErr.Message)
 				if appErr.Type == ErrorTypeCLI {
@@ -97,7 +96,7 @@ func main() {
 			return err
 		},
 	}
-	
+
 	if err := app.Run(context.Background(), os.Args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -193,6 +192,10 @@ func generateTarget(config *Config) error {
 		fmt.Printf("Skipped %d definitions: %v\n",
 			generator.GetSkippedCount(), generator.GetSkippedItems())
 	}
+	if generator.GetExcludedCount() > 0 {
+		fmt.Printf("Excluded %d definitions from %s: %v\n",
+			generator.GetExcludedCount(), config.ExcludeFrom, generator.GetExcludedItems())
+	}
 
 	return nil
 }
@@ -200,7 +203,7 @@ func generateTarget(config *Config) error {
 // validateAction handles the validate command
 func validateAction(ctx context.Context, cmd *cli.Command) error {
 	inputFile := cmd.String("input")
-	
+
 	config := &Config{
 		InputFile:   inputFile,
 		PackageName: "temp", // Dummy package name for validation
@@ -242,4 +245,3 @@ func loadSchemaConfigIfExists(config *Config, configPath string) error {
 	config.MergeWithFileConfig(fileConfig)
 	return nil
 }
-

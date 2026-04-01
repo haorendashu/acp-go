@@ -63,6 +63,10 @@ func (c *ClientSideConnection) Authenticate(ctx context.Context, params *Authent
 	return sendRequest[AuthenticateResponse](ctx, c.conn, AgentMethods.Authenticate, params)
 }
 
+func (c *ClientSideConnection) Logout(ctx context.Context, params *LogoutRequest) (*LogoutResponse, error) {
+	return sendRequest[LogoutResponse](ctx, c.conn, AgentMethods.Logout, params)
+}
+
 func (c *ClientSideConnection) NewSession(ctx context.Context, params *NewSessionRequest) (*NewSessionResponse, error) {
 	return sendRequest[NewSessionResponse](ctx, c.conn, AgentMethods.SessionNew, params)
 }
@@ -91,22 +95,32 @@ func (c *ClientSideConnection) Cancel(ctx context.Context, params *CancelNotific
 	return c.conn.SendNotification(ctx, AgentMethods.SessionCancel, params)
 }
 
-// --- Unstable outbound agent-calling methods ---
+// --- Optional outbound agent-calling methods ---
 
 func (c *ClientSideConnection) ForkSession(ctx context.Context, params *ForkSessionRequest) (*ForkSessionResponse, error) {
-	return sendRequest[ForkSessionResponse](ctx, c.conn, AgentMethodsUnstable.SessionFork, params)
+	return sendRequest[ForkSessionResponse](ctx, c.conn, AgentMethods.SessionFork, params)
 }
 
 func (c *ClientSideConnection) ResumeSession(ctx context.Context, params *ResumeSessionRequest) (*ResumeSessionResponse, error) {
-	return sendRequest[ResumeSessionResponse](ctx, c.conn, AgentMethodsUnstable.SessionResume, params)
+	return sendRequest[ResumeSessionResponse](ctx, c.conn, AgentMethods.SessionResume, params)
 }
 
 func (c *ClientSideConnection) CloseSession(ctx context.Context, params *CloseSessionRequest) (*CloseSessionResponse, error) {
-	return sendRequest[CloseSessionResponse](ctx, c.conn, AgentMethodsUnstable.SessionClose, params)
+	return sendRequest[CloseSessionResponse](ctx, c.conn, AgentMethods.SessionClose, params)
 }
 
 func (c *ClientSideConnection) SetSessionModel(ctx context.Context, params *SetSessionModelRequest) (*SetSessionModelResponse, error) {
-	return sendRequest[SetSessionModelResponse](ctx, c.conn, AgentMethodsUnstable.SessionSetModel, params)
+	return sendRequest[SetSessionModelResponse](ctx, c.conn, AgentMethods.SessionSetModel, params)
+}
+
+// --- Unstable outbound client-calling methods (agent -> client) ---
+
+func (c *AgentSideConnection) Elicitation(ctx context.Context, params *ElicitationRequest) (*ElicitationResponse, error) {
+	return sendRequest[ElicitationResponse](ctx, c.conn, ClientMethods.SessionElicitation, params)
+}
+
+func (c *AgentSideConnection) ElicitationComplete(ctx context.Context, params *ElicitationCompleteNotification) error {
+	return c.conn.SendNotification(ctx, ClientMethods.SessionElicitationComplete, params)
 }
 
 // --- Extension methods ---
@@ -141,6 +155,16 @@ func (c *ClientSideConnection) handleIncomingMethod(ctx context.Context, method 
 		return unmarshalAndCall(ctx, params, c.impl.WaitForTerminalExit)
 	case ClientMethods.TerminalKill:
 		return unmarshalAndCall(ctx, params, c.impl.KillTerminalCommand)
+	case ClientMethods.SessionElicitation:
+		if handler, ok := c.impl.(ElicitationHandler); ok {
+			return unmarshalAndCall(ctx, params, handler.Elicitation)
+		}
+		return nil, ErrMethodNotFound(method)
+	case ClientMethods.SessionElicitationComplete:
+		if handler, ok := c.impl.(ElicitationCompleteHandler); ok {
+			return unmarshalAndCallVoid(ctx, params, handler.ElicitationComplete)
+		}
+		return nil, ErrMethodNotFound(method)
 	default:
 		if handler, ok := c.impl.(ExtMethodHandler); ok {
 			return handler.ExtMethod(ctx, method, params)

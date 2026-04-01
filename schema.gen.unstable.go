@@ -6,20 +6,6 @@ package acp
 //
 // This capability is not part of the spec yet, and may be removed or changed at any point.
 //
-// Authentication capabilities supported by the client.
-//
-// Advertised during initialization to inform the agent which authentication
-// method types the client can handle. This governs opt-in types that require
-// additional client-side support.
-type AuthCapabilities struct {
-	Meta     map[string]any `json:"_meta,omitempty"`
-	Terminal bool           `json:"terminal,omitempty"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
 // Describes a single environment variable for an [`AuthMethodEnvVar`] authentication method.
 type AuthEnvVar struct {
 	Meta     map[string]any `json:"_meta,omitempty"`
@@ -77,31 +63,6 @@ type CancelRequestNotification struct {
 //
 // This capability is not part of the spec yet, and may be removed or changed at any point.
 //
-// Request parameters for closing an active session.
-//
-// If supported, the agent **must** cancel any ongoing work related to the session
-// (treat it as if `session/cancel` was called) and then free up any resources
-// associated with the session.
-//
-// Only available if the Agent supports the `session.close` capability.
-type CloseSessionRequest struct {
-	Meta      map[string]any `json:"_meta,omitempty"`
-	SessionID SessionID      `json:"sessionId"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// Response from closing a session.
-type CloseSessionResponse struct {
-	Meta map[string]any `json:"_meta,omitempty"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
 // Cost information for a session.
 type Cost struct {
 	Amount   float64 `json:"amount"`
@@ -112,144 +73,9 @@ type Cost struct {
 //
 // This capability is not part of the spec yet, and may be removed or changed at any point.
 //
-// Request parameters for forking an existing session.
-//
-// Creates a new session based on the context of an existing one, allowing
-// operations like generating summaries without affecting the original session's history.
-//
-// Only available if the Agent supports the `session.fork` capability.
-type ForkSessionRequest struct {
-	Meta       map[string]any `json:"_meta,omitempty"`
-	Cwd        string         `json:"cwd"`
-	MCPServers []MCPServer    `json:"mcpServers,omitempty"`
-	SessionID  SessionID      `json:"sessionId"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// Response from forking an existing session.
-type ForkSessionResponse struct {
-	Meta          map[string]any        `json:"_meta,omitempty"`
-	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
-	Models        *SessionModelState    `json:"models,omitempty"`
-	Modes         *SessionModeState     `json:"modes,omitempty"`
-	SessionID     SessionID             `json:"sessionId"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// Information about a selectable model.
-type ModelInfo struct {
-	Meta        map[string]any `json:"_meta,omitempty"`
-	Description string         `json:"description,omitempty"`
-	ModelID     ModelID        `json:"modelId"`
-	Name        string         `json:"name"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// Request parameters for resuming an existing session.
-//
-// Resumes an existing session without returning previous messages (unlike `session/load`).
-// This is useful for agents that can resume sessions but don't implement full session loading.
-//
-// Only available if the Agent supports the `session.resume` capability.
-type ResumeSessionRequest struct {
-	Meta       map[string]any `json:"_meta,omitempty"`
-	Cwd        string         `json:"cwd"`
-	MCPServers []MCPServer    `json:"mcpServers,omitempty"`
-	SessionID  SessionID      `json:"sessionId"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// Response from resuming an existing session.
-type ResumeSessionResponse struct {
-	Meta          map[string]any        `json:"_meta,omitempty"`
-	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
-	Models        *SessionModelState    `json:"models,omitempty"`
-	Modes         *SessionModeState     `json:"modes,omitempty"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// Capabilities for the `session/close` method.
-//
-// By supplying `{}` it means that the agent supports closing of sessions.
-type SessionCloseCapabilities struct {
-	Meta map[string]any `json:"_meta,omitempty"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
 // A boolean on/off toggle session configuration option payload.
 type SessionConfigBoolean struct {
 	CurrentValue bool `json:"currentValue"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// Capabilities for the `session/fork` method.
-//
-// By supplying `{}` it means that the agent supports forking of sessions.
-type SessionForkCapabilities struct {
-	Meta map[string]any `json:"_meta,omitempty"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// The set of models and the one currently active.
-type SessionModelState struct {
-	Meta            map[string]any `json:"_meta,omitempty"`
-	AvailableModels []ModelInfo    `json:"availableModels"`
-	CurrentModelID  ModelID        `json:"currentModelId"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// Capabilities for the `session/resume` method.
-//
-// By supplying `{}` it means that the agent supports resuming of sessions.
-type SessionResumeCapabilities struct {
-	Meta map[string]any `json:"_meta,omitempty"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// Request parameters for setting a session model.
-type SetSessionModelRequest struct {
-	Meta      map[string]any `json:"_meta,omitempty"`
-	ModelID   ModelID        `json:"modelId"`
-	SessionID SessionID      `json:"sessionId"`
-}
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// Response to `session/set_model` method.
-type SetSessionModelResponse struct {
-	Meta map[string]any `json:"_meta,omitempty"`
 }
 
 // **UNSTABLE**
@@ -277,18 +103,3 @@ type UsageUpdate struct {
 	Size int64          `json:"size"`
 	Used int64          `json:"used"`
 }
-
-// **UNSTABLE**
-//
-// This capability is not part of the spec yet, and may be removed or changed at any point.
-//
-// A unique identifier for a model.
-type ModelID string
-
-// Agent method names (unstable)
-var AgentMethodsUnstable = struct {
-	SessionClose    string
-	SessionFork     string
-	SessionResume   string
-	SessionSetModel string
-}{SessionClose: "session/close", SessionFork: "session/fork", SessionResume: "session/resume", SessionSetModel: "session/set_model"}

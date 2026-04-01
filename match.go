@@ -17,6 +17,7 @@ type SessionUpdateMatcher[T any] struct {
 	CurrentModeUpdate       func(SessionUpdateCurrentModeUpdate) T
 	ConfigOptionUpdate      func(SessionUpdateConfigOptionUpdate) T
 	SessionInfoUpdate       func(SessionUpdateSessionInfoUpdate) T
+	UsageUpdate             func(SessionUpdateUsageUpdate) T
 	Default                 func() T
 }
 
@@ -84,6 +85,12 @@ func MatchSessionUpdate[T any](u *SessionUpdate, m SessionUpdateMatcher[T]) T {
 			return m.SessionInfoUpdate(v)
 		}
 		return matchDefault(m.Default, "SessionInfoUpdate")
+	}
+	if v, ok := u.AsUsageUpdate(); ok {
+		if m.UsageUpdate != nil {
+			return m.UsageUpdate(v)
+		}
+		return matchDefault(m.Default, "UsageUpdate")
 	}
 	panic("SessionUpdate has no variant set")
 }
@@ -224,4 +231,69 @@ func matchDefault[T any](fn func() T, variant string) T {
 		return fn()
 	}
 	panic(fmt.Sprintf("unhandled variant %s and no Default handler set", variant))
+}
+
+// AuthMethodMatcher defines handlers for each AuthMethod variant.
+//
+// Use with MatchAuthMethod for exhaustive pattern matching on AuthMethod values.
+type AuthMethodMatcher[T any] struct {
+	Agent    func(AuthMethodAgent) T
+	EnvVar   func(AuthMethodEnvVar) T
+	Terminal func(AuthMethodTerminal) T
+	Default  func() T
+}
+
+// MatchAuthMethod applies exhaustive pattern matching on an AuthMethod.
+//
+// Calls the handler matching the active variant. If the handler is nil,
+// falls back to Default. If Default is also nil, panics.
+func MatchAuthMethod[T any](a *AuthMethod, m AuthMethodMatcher[T]) T {
+	if v, ok := a.AsAgent(); ok {
+		if m.Agent != nil {
+			return m.Agent(v)
+		}
+		return matchDefault(m.Default, "Agent")
+	}
+	if v, ok := a.AsEnvVar(); ok {
+		if m.EnvVar != nil {
+			return m.EnvVar(v)
+		}
+		return matchDefault(m.Default, "EnvVar")
+	}
+	if v, ok := a.AsTerminal(); ok {
+		if m.Terminal != nil {
+			return m.Terminal(v)
+		}
+		return matchDefault(m.Default, "Terminal")
+	}
+	panic("AuthMethod has no variant set")
+}
+
+// SessionConfigOptionMatcher defines handlers for each SessionConfigOption type variant.
+//
+// Use with MatchSessionConfigOption to pattern-match select vs boolean config options.
+type SessionConfigOptionMatcher[T any] struct {
+	Select  func(SessionConfigOption, SessionConfigSelect) T
+	Boolean func(SessionConfigOption, SessionConfigBoolean) T
+	Default func() T
+}
+
+// MatchSessionConfigOption applies pattern matching on a SessionConfigOption.
+//
+// Calls the handler matching the Type field ("select" or "boolean").
+// Falls back to Default if the handler is nil. Panics if Default is also nil.
+func MatchSessionConfigOption[T any](o *SessionConfigOption, m SessionConfigOptionMatcher[T]) T {
+	if v, ok := o.AsSelectOption(); ok {
+		if m.Select != nil {
+			return m.Select(*o, v)
+		}
+		return matchDefault(m.Default, "Select")
+	}
+	if v, ok := o.AsBoolOption(); ok {
+		if m.Boolean != nil {
+			return m.Boolean(*o, v)
+		}
+		return matchDefault(m.Default, "Boolean")
+	}
+	panic("SessionConfigOption has unknown or missing type: " + o.Type)
 }

@@ -502,3 +502,200 @@ func TestNewGenerator(t *testing.T) {
 		t.Error("NewGenerator() schema should be nil initially")
 	}
 }
+
+func TestGenerator_StructFieldUnionFallsBackToRawMessage(t *testing.T) {
+	testDir := "testdata_union_field"
+	schemaFile := filepath.Join(testDir, "test.json")
+	outputFile := filepath.Join(testDir, "output.go")
+
+	defer os.RemoveAll(testDir)
+
+	os.MkdirAll(testDir, 0755)
+	os.WriteFile(schemaFile, []byte(`{
+		"$defs": {
+			"ExampleRequest": {
+				"type": "object",
+				"properties": {
+					"id": {"type": "string"},
+					"method": {"type": "string"},
+					"params": {
+						"anyOf": [
+							{"$ref": "#/$defs/FooParams"},
+							{"$ref": "#/$defs/BarParams"},
+							{"type": "null"}
+						]
+					}
+				},
+				"required": ["id", "method" ]
+			},
+			"FooParams": {
+				"type": "object",
+				"properties": {"foo": {"type": "string"}}
+			},
+			"BarParams": {
+				"type": "object",
+				"properties": {"bar": {"type": "integer"}}
+			}
+		}
+	}`), 0644)
+
+	config := &Config{
+		InputFile:   schemaFile,
+		OutputFile:  outputFile,
+		PackageName: "test",
+	}
+
+	generator := NewGenerator(config)
+	if err := generator.LoadSchema(); err != nil {
+		t.Fatalf("Failed to load schema: %v", err)
+	}
+	if err := generator.Generate(); err != nil {
+		t.Fatalf("Failed to generate: %v", err)
+	}
+	if err := generator.SaveToFile(); err != nil {
+		t.Fatalf("Failed to save: %v", err)
+	}
+
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	contentStr := string(content)
+	if !strings.Contains(contentStr, "type ExampleRequest struct") {
+		t.Fatalf("expected ExampleRequest struct to be generated, got:\n%s", contentStr)
+	}
+	if !strings.Contains(contentStr, "Params json.RawMessage `json:\"params,omitempty\"`") {
+		t.Fatalf("expected Params json.RawMessage fallback, got:\n%s", contentStr)
+	}
+	if !strings.Contains(contentStr, `"encoding/json"`) {
+		t.Fatalf("expected encoding/json import for RawMessage, got:\n%s", contentStr)
+	}
+}
+
+func TestGenerator_OpaqueUnknownDefinitionFallsBackToAny(t *testing.T) {
+	testDir := "testdata_opaque_unknown"
+	schemaFile := filepath.Join(testDir, "test.json")
+	outputFile := filepath.Join(testDir, "output.go")
+
+	defer os.RemoveAll(testDir)
+
+	os.MkdirAll(testDir, 0755)
+	os.WriteFile(schemaFile, []byte(`{
+		"$defs": {
+			"ExtRequest": {
+				"description": "Opaque extension request"
+			}
+		}
+	}`), 0644)
+
+	config := &Config{
+		InputFile:   schemaFile,
+		OutputFile:  outputFile,
+		PackageName: "test",
+	}
+
+	generator := NewGenerator(config)
+	if err := generator.LoadSchema(); err != nil {
+		t.Fatalf("Failed to load schema: %v", err)
+	}
+	if err := generator.Generate(); err != nil {
+		t.Fatalf("Failed to generate: %v", err)
+	}
+	if err := generator.SaveToFile(); err != nil {
+		t.Fatalf("Failed to save: %v", err)
+	}
+
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	contentStr := string(content)
+	if !strings.Contains(contentStr, "type ExtRequest any") {
+		t.Fatalf("expected opaque definition to fall back to any, got:\n%s", contentStr)
+	}
+}
+
+func TestGenerator_JSONRPCResponseEnvelopeGeneratesStrongStruct(t *testing.T) {
+	testDir := "testdata_response_envelope"
+	schemaFile := filepath.Join(testDir, "test.json")
+	outputFile := filepath.Join(testDir, "output.go")
+
+	defer os.RemoveAll(testDir)
+
+	os.MkdirAll(testDir, 0755)
+	os.WriteFile(schemaFile, []byte(`{
+		"$defs": {
+			"RequestId": {
+				"type": ["string", "integer"]
+			},
+			"Error": {
+				"type": "object",
+				"properties": {
+					"message": {"type": "string"}
+				}
+			},
+			"AgentResponse": {
+				"description": "A response from the agent.",
+				"anyOf": [
+					{
+						"type": "object",
+						"properties": {
+							"id": {"$ref": "#/$defs/RequestId"},
+							"result": {}
+						},
+						"required": ["id", "result"]
+					},
+					{
+						"type": "object",
+						"properties": {
+							"id": {"$ref": "#/$defs/RequestId"},
+							"error": {"$ref": "#/$defs/Error"}
+						},
+						"required": ["id", "error"]
+					}
+				]
+			}
+		}
+	}`), 0644)
+
+	config := &Config{
+		InputFile:   schemaFile,
+		OutputFile:  outputFile,
+		PackageName: "test",
+	}
+
+	generator := NewGenerator(config)
+	if err := generator.LoadSchema(); err != nil {
+		t.Fatalf("Failed to load schema: %v", err)
+	}
+	if err := generator.Generate(); err != nil {
+		t.Fatalf("Failed to generate: %v", err)
+	}
+	if err := generator.SaveToFile(); err != nil {
+		t.Fatalf("Failed to save: %v", err)
+	}
+
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	contentStr := string(content)
+	if !strings.Contains(contentStr, "type AgentResponse struct") {
+		t.Fatalf("expected AgentResponse struct to be generated, got:\n%s", contentStr)
+	}
+	if !strings.Contains(contentStr, "json:\"id\"`") || !strings.Contains(contentStr, "RequestID") {
+		t.Fatalf("expected ID field in response envelope, got:\n%s", contentStr)
+	}
+	if !strings.Contains(contentStr, "Result json.RawMessage `json:\"result,omitempty\"`") {
+		t.Fatalf("expected Result raw message field in response envelope, got:\n%s", contentStr)
+	}
+	if !strings.Contains(contentStr, "json:\"error,omitempty\"`") || !strings.Contains(contentStr, "*Error") {
+		t.Fatalf("expected Error field in response envelope, got:\n%s", contentStr)
+	}
+	if !strings.Contains(contentStr, `"encoding/json"`) {
+		t.Fatalf("expected encoding/json import for response envelope, got:\n%s", contentStr)
+	}
+}
